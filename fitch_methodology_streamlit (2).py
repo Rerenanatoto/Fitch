@@ -12,9 +12,10 @@ APP_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = APP_DIR / "assets"
 INTERCEPT = 4.877
 
-# -----------------------------
-# Fitch SRM inputs and metadata
-# -----------------------------
+# ============================================================
+# Metadata
+# ============================================================
+
 SRM_VARIABLES = {
     "structural": {
         "governance_indicator": {
@@ -53,7 +54,7 @@ SRM_VARIABLES = {
             "label": "Real GDP growth volatility - natural log",
             "coefficient": -0.704,
             "weight": 4.5,
-            "help": "Natural log of the exponentially weighted std. deviation of real GDP growth.",
+            "help": "Natural log of the exponentially weighted std. deviation of historical real GDP growth.",
         },
         "consumer_price_inflation": {
             "label": "Consumer price inflation (3-year centred average, %, truncated 2%-50%)",
@@ -173,11 +174,22 @@ QO_GUIDANCE = {
 }
 
 RATING_SCALE_NUMERIC = {
-    16: "AAA", 15: "AA+", 14: "AA", 13: "AA-",
-    12: "A+", 11: "A", 10: "A-",
-    9: "BBB+", 8: "BBB", 7: "BBB-",
-    6: "BB+", 5: "BB", 4: "BB-",
-    3: "B+", 2: "B", 1: "B-"
+    16: "AAA",
+    15: "AA+",
+    14: "AA",
+    13: "AA-",
+    12: "A+",
+    11: "A",
+    10: "A-",
+    9: "BBB+",
+    8: "BBB",
+    7: "BBB-",
+    6: "BB+",
+    5: "BB",
+    4: "BB-",
+    3: "B+",
+    2: "B",
+    1: "B-",
 }
 
 LONG_TERM_SCALE = [
@@ -186,7 +198,7 @@ LONG_TERM_SCALE = [
     "BBB+", "BBB", "BBB-",
     "BB+", "BB", "BB-",
     "B+", "B", "B-",
-    "CCC+", "CCC", "CCC-", "CC", "C", "RD", "D"
+    "CCC+", "CCC", "CCC-", "CC", "C", "RD", "D",
 ]
 
 ST_MAPPING_OPTIONS = {
@@ -215,9 +227,6 @@ ST_MAPPING_OPTIONS = {
     "D": ("D", "D"),
 }
 
-# -----------------------------
-# Validation rules (soft + hard)
-# -----------------------------
 VARIABLE_RULES = {
     "governance_indicator": {"step": 0.1, "soft_min": 0, "soft_max": 100},
     "gdp_per_capita_percentile": {"step": 0.1, "soft_min": 0, "soft_max": 100},
@@ -240,9 +249,10 @@ VARIABLE_RULES = {
 }
 
 
-# -----------------------------
+# ============================================================
 # Helpers
-# -----------------------------
+# ============================================================
+
 def show_image(path: Path, caption: str | None = None):
     try:
         st.image(str(path), caption=caption, use_container_width=True)
@@ -291,41 +301,6 @@ def approx_years_since_default_transform(years_since_event: float | None, no_eve
     return float(math.exp(-math.log(2) * years_since_event / 4.3))
 
 
-def compute_srm(inputs: dict[str, float]) -> tuple[float, list[dict]]:
-    details = []
-    total = INTERCEPT
-    for pillar_key, vars_dict in SRM_VARIABLES.items():
-        for var_key, meta in vars_dict.items():
-            value = float(inputs.get(var_key, 0.0))
-            contribution = value * float(meta["coefficient"])
-            total += contribution
-            details.append({
-                "Pillar": PILLAR_LABELS[pillar_key],
-                "Variable": meta["label"],
-                "Value": value,
-                "Coefficient": meta["coefficient"],
-                "Contribution": contribution,
-            })
-    details.append({
-        "Pillar": "Intercept",
-        "Variable": "OLS intercept",
-        "Value": 1.0,
-        "Coefficient": INTERCEPT,
-        "Contribution": INTERCEPT,
-    })
-    return total, details
-
-
-def build_radar(srm_score: float, qo_total: int, final_score: float):
-    categories = ["SRM score", "QO total", "Final model score"]
-    values = [srm_score, qo_total, final_score]
-    categories += categories[:1]
-    values += values[:1]
-    fig = go.Figure(data=[go.Scatterpolar(r=values, theta=categories, fill="toself")])
-    fig.update_layout(showlegend=False, polar=dict(radialaxis=dict(visible=True)))
-    return fig
-
-
 def safe_number_input(var_key: str, label: str, default: float, help_text: str):
     rule = VARIABLE_RULES.get(var_key, {"step": 0.1})
     return st.number_input(
@@ -335,6 +310,21 @@ def safe_number_input(var_key: str, label: str, default: float, help_text: str):
         key=var_key,
         help=help_text,
     )
+
+
+def get_clean_srm_inputs() -> dict[str, float]:
+    """
+    Returns the SRM inputs cleaned for calculation.
+    Important: do NOT write back into st.session_state here.
+    """
+    inputs = {}
+    for pillar in SRM_VARIABLES.values():
+        for k in pillar.keys():
+            v = float(st.session_state.get(k, 0.0))
+            if k == "consumer_price_inflation":
+                v = min(50.0, max(2.0, v))
+            inputs[k] = v
+    return inputs
 
 
 def validate_inputs(inputs: dict[str, float]) -> list[str]:
@@ -367,9 +357,49 @@ def validate_inputs(inputs: dict[str, float]) -> list[str]:
     return warnings
 
 
-# -----------------------------
+def compute_srm(inputs: dict[str, float]) -> tuple[float, list[dict]]:
+    details = []
+    total = INTERCEPT
+    for pillar_key, vars_dict in SRM_VARIABLES.items():
+        for var_key, meta in vars_dict.items():
+            value = float(inputs.get(var_key, 0.0))
+            contribution = value * float(meta["coefficient"])
+            total += contribution
+            details.append(
+                {
+                    "Pillar": PILLAR_LABELS[pillar_key],
+                    "Variable": meta["label"],
+                    "Value": value,
+                    "Coefficient": meta["coefficient"],
+                    "Contribution": contribution,
+                }
+            )
+    details.append(
+        {
+            "Pillar": "Intercept",
+            "Variable": "OLS intercept",
+            "Value": 1.0,
+            "Coefficient": INTERCEPT,
+            "Contribution": INTERCEPT,
+        }
+    )
+    return total, details
+
+
+def build_radar(srm_score: float, qo_total: int, final_score: float):
+    categories = ["SRM score", "QO total", "Final model score"]
+    values = [srm_score, qo_total, final_score]
+    categories += categories[:1]
+    values += values[:1]
+    fig = go.Figure(data=[go.Scatterpolar(r=values, theta=categories, fill="toself")])
+    fig.update_layout(showlegend=False, polar=dict(radialaxis=dict(visible=True)))
+    return fig
+
+
+# ============================================================
 # State
-# -----------------------------
+# ============================================================
+
 def init_state():
     defaults = {
         "governance_indicator": 50.0,
@@ -402,28 +432,31 @@ def init_state():
         st.session_state.setdefault(k, v)
 
 
-# -----------------------------
+# ============================================================
 # Pages
-# -----------------------------
+# ============================================================
+
 def page_overview():
     st.title("Fitch Sovereign Methodology")
     st.caption("Blindada: SRM + QO + Results com validações leves de entrada.")
 
     col1, col2 = st.columns([1.1, 0.9])
+
     with col1:
         st.markdown(
             """
-### Included
+### Incluído
 - SRM starting point
-- QO by the 4 Fitch analytical pillars
-- LT FC / LT LC / ST FC / ST LC output
-- Input validation and consistency checks
+- QO pelos 4 pilares
+- LT FC / LT LC / ST FC / ST LC
+- Validações leves de entrada
 
-### Notes
-- Uses SRM-ready inputs where Fitch public criteria describe transformed variables
-- Treat outputs at **CCC+ or below** as model guidance only
+### Notas
+- Usa inputs “SRM-ready” quando a variável pública é transformada
+- Saídas em **CCC+ ou abaixo** devem ser tratadas como orientação de modelo
             """
         )
+
     with col2:
         img = ASSETS_DIR / "fitch_summary.png"
         if img.exists():
@@ -438,20 +471,52 @@ def page_srm_inputs(pillar: str):
 
     if pillar == "structural":
         with st.expander("Helpers", expanded=False):
-            share_pct = st.number_input("Share in world GDP (% share, raw)", min_value=0.000001, value=0.5, step=0.1, key="helper_share_world_pct")
+            share_pct = st.number_input(
+                "Share in world GDP (% share, raw)",
+                min_value=0.000001,
+                value=0.5,
+                step=0.1,
+                key="helper_share_world_pct",
+            )
             st.write(f"log(% share) ≈ **{math.log(max(share_pct, 1e-9)):.4f}**")
-            broad_money_pct = st.number_input("Broad money (% of GDP, raw)", min_value=0.0001, value=60.0, step=1.0, key="helper_broad_money")
+
+            broad_money_pct = st.number_input(
+                "Broad money (% of GDP, raw)",
+                min_value=0.0001,
+                value=60.0,
+                step=1.0,
+                key="helper_broad_money",
+            )
             st.write(f"log(broad money % GDP) ≈ **{math.log(max(broad_money_pct, 1e-9)):.4f}**")
-            no_event = st.checkbox("No default/restructuring event after 1980", value=True, key="helper_no_event")
-            yrs = st.number_input("Years since last default/restructuring event", min_value=0.0, value=0.0, step=1.0, key="helper_years_since_event")
+
+            no_event = st.checkbox(
+                "No default/restructuring event after 1980",
+                value=True,
+                key="helper_no_event",
+            )
+            yrs = st.number_input(
+                "Years since last default/restructuring event",
+                min_value=0.0,
+                value=0.0,
+                step=1.0,
+                key="helper_years_since_event",
+            )
             approx = approx_years_since_default_transform(yrs, no_event)
             st.write(f"Approx transformed value ≈ **{approx:.4f}**")
+
             if st.button("Use approximate transformed value", key="use_years_transform"):
+                # Safe because this button is above the actual widget creation for years_since_default_transform
                 st.session_state["years_since_default_transform"] = approx
 
     if pillar == "macro":
         with st.expander("Helper: volatility log", expanded=False):
-            vol_raw = st.number_input("Real GDP growth volatility (raw std. dev.)", min_value=0.0001, value=3.0, step=0.1, key="helper_real_gdp_vol")
+            vol_raw = st.number_input(
+                "Real GDP growth volatility (raw std. dev.)",
+                min_value=0.0001,
+                value=3.0,
+                step=0.1,
+                key="helper_real_gdp_vol",
+            )
             st.write(f"log(volatility) ≈ **{math.log(max(vol_raw, 1e-9)):.4f}**")
 
     if pillar == "external":
@@ -464,31 +529,50 @@ def page_srm_inputs(pillar: str):
             )
 
     rows = []
+
     for var_key, meta in SRM_VARIABLES[pillar].items():
-        value = safe_number_input(var_key, meta["label"], st.session_state.get(var_key, 0.0), meta["help"])
+        value_raw = safe_number_input(
+            var_key,
+            meta["label"],
+            st.session_state.get(var_key, 0.0),
+            meta["help"],
+        )
+
+        value_used = float(value_raw)
 
         if var_key == "consumer_price_inflation":
-            clipped = min(50.0, max(2.0, float(value)))
-            if clipped != float(value):
-                st.warning(f"{meta['label']} foi ajustada automaticamente para {clipped:.2f}%, conforme a regra pública 2%-50%.")
-            value = clipped
-            st.session_state[var_key] = clipped
+            clipped = min(50.0, max(2.0, value_used))
+            if clipped != value_used:
+                st.warning(
+                    f"{meta['label']} foi ajustada automaticamente para {clipped:.2f}%, "
+                    "conforme a regra pública 2%-50%."
+                )
+            value_used = clipped
 
         rule = VARIABLE_RULES.get(var_key, {})
         soft_min = rule.get("soft_min")
         soft_max = rule.get("soft_max")
-        if soft_min is not None and value < soft_min:
-            st.warning(f"{meta['label']} está abaixo da faixa esperada ({value:.2f} < {soft_min}).")
-        if soft_max is not None and value > soft_max:
-            st.warning(f"{meta['label']} está acima da faixa esperada ({value:.2f} > {soft_max}).")
 
-        rows.append({
-            "Variable": meta["label"],
-            "Coefficient": meta["coefficient"],
-            "SRM weight (%)": meta["weight"],
-            "Input value": float(value),
-            "Contribution": float(value) * float(meta["coefficient"]),
-        })
+        if soft_min is not None and value_used < soft_min:
+            st.warning(
+                f"{meta['label']} está abaixo da faixa esperada "
+                f"({value_used:.2f} < {soft_min})."
+            )
+        if soft_max is not None and value_used > soft_max:
+            st.warning(
+                f"{meta['label']} está acima da faixa esperada "
+                f"({value_used:.2f} > {soft_max})."
+            )
+
+        rows.append(
+            {
+                "Variable": meta["label"],
+                "Coefficient": meta["coefficient"],
+                "SRM weight (%)": meta["weight"],
+                "Input value": value_used,
+                "Contribution": value_used * float(meta["coefficient"]),
+            }
+        )
 
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
@@ -524,6 +608,7 @@ def page_qo():
     c1, c2 = st.columns(2)
     c1.metric("Raw QO total", f"{sum(raw.values()):+d}")
     c2.metric("Applied QO total", f"{qo_total:+d}")
+
     if not crisis and qo_total != sum(raw.values()):
         st.info("Raw QO total capped to +3/-3.")
 
@@ -531,7 +616,7 @@ def page_qo():
 def page_results():
     st.title("Results")
 
-    srm_inputs = {k: float(st.session_state.get(k, 0.0)) for pillar in SRM_VARIABLES.values() for k in pillar.keys()}
+    srm_inputs = get_clean_srm_inputs()
     srm_score, details = compute_srm(srm_inputs)
 
     qo_raw = {
@@ -608,6 +693,10 @@ def page_results():
         mime="application/json",
     )
 
+
+# ============================================================
+# Main
+# ============================================================
 
 def main():
     init_state()
