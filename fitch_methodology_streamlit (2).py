@@ -12,32 +12,125 @@ APP_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = APP_DIR / "assets"
 INTERCEPT = 4.877
 
+# -----------------------------
+# Fitch SRM inputs and metadata
+# -----------------------------
 SRM_VARIABLES = {
     "structural": {
-        "governance_indicator": {"label": "Composite governance indicator (percentile rank)", "coefficient": 0.079, "weight": 22.1, "help": "Simple average percentile rank of World Bank governance indicators."},
-        "gdp_per_capita_percentile": {"label": "GDP per capita percentile rank (USD, market FX)", "coefficient": 0.037, "weight": 11.7, "help": "Percentile rank across Fitch-rated sovereigns."},
-        "share_world_gdp_log": {"label": "Share in world GDP (natural log of % share)", "coefficient": 0.645, "weight": 14.5, "help": "Natural logarithm of percentage share in world GDP in USD."},
-        "years_since_default_transform": {"label": "Years since default/restructuring event (SRM transformed value)", "coefficient": -1.744, "weight": 4.3, "help": "Use 0 if no event after 1980. Otherwise enter the transformed value used in the SRM or use the helper approximation below."},
-        "money_supply_log": {"label": "Broad money supply (% of GDP) - natural log", "coefficient": 0.148, "weight": 1.1, "help": "Natural logarithm of broad money as % of GDP."},
+        "governance_indicator": {
+            "label": "Composite governance indicator (percentile rank)",
+            "coefficient": 0.079,
+            "weight": 22.1,
+            "help": "Simple average percentile rank of World Bank governance indicators.",
+        },
+        "gdp_per_capita_percentile": {
+            "label": "GDP per capita percentile rank (USD, market FX)",
+            "coefficient": 0.037,
+            "weight": 11.7,
+            "help": "Percentile rank across Fitch-rated sovereigns.",
+        },
+        "share_world_gdp_log": {
+            "label": "Share in world GDP (natural log of % share)",
+            "coefficient": 0.645,
+            "weight": 14.5,
+            "help": "Natural logarithm of the percentage share in world GDP.",
+        },
+        "years_since_default_transform": {
+            "label": "Years since default/restructuring event (SRM transformed value)",
+            "coefficient": -1.744,
+            "weight": 4.3,
+            "help": "Use 0 if no event after 1980, or input the SRM-ready transformed value.",
+        },
+        "money_supply_log": {
+            "label": "Broad money supply (% of GDP) - natural log",
+            "coefficient": 0.148,
+            "weight": 1.1,
+            "help": "Natural logarithm of broad money as % of GDP.",
+        },
     },
     "macro": {
-        "real_gdp_growth_volatility_log": {"label": "Real GDP growth volatility - natural log", "coefficient": -0.704, "weight": 4.5, "help": "Natural log of the exponentially weighted standard deviation of historical annual real GDP growth."},
-        "consumer_price_inflation": {"label": "Consumer price inflation (three-year centred average, %, truncated 2%-50%)", "coefficient": -0.068, "weight": 3.6, "help": "Use the three-year centred average; app truncates to 2%-50%."},
-        "real_gdp_growth": {"label": "Real GDP growth (three-year centred average, %)", "coefficient": 0.054, "weight": 1.7, "help": "Use the three-year centred average."},
+        "real_gdp_growth_volatility_log": {
+            "label": "Real GDP growth volatility - natural log",
+            "coefficient": -0.704,
+            "weight": 4.5,
+            "help": "Natural log of the exponentially weighted std. deviation of real GDP growth.",
+        },
+        "consumer_price_inflation": {
+            "label": "Consumer price inflation (3-year centred average, %, truncated 2%-50%)",
+            "coefficient": -0.068,
+            "weight": 3.6,
+            "help": "Public criteria truncate this variable to the 2%-50% range.",
+        },
+        "real_gdp_growth": {
+            "label": "Real GDP growth (3-year centred average, %)",
+            "coefficient": 0.054,
+            "weight": 1.7,
+            "help": "Three-year centred average.",
+        },
     },
     "public_finances": {
-        "gross_general_govt_debt": {"label": "Gross general government debt (% of GDP, three-year centred average)", "coefficient": -0.023, "weight": 9.2, "help": "Gross general government debt, centred three-year average."},
-        "general_govt_interest_revenue": {"label": "General government interest (% of revenues, three-year centred average)", "coefficient": -0.044, "weight": 4.6, "help": "General government interest expenditures as % of revenues, centred three-year average."},
-        "general_govt_fiscal_balance": {"label": "General government fiscal balance (% of GDP, three-year centred average)", "coefficient": 0.039, "weight": 2.1, "help": "General government fiscal balance, centred three-year average."},
-        "fc_govt_debt_share": {"label": "Foreign-currency government debt (% of gross government debt, three-year centred average)", "coefficient": -0.008, "weight": 3.2, "help": "Foreign-currency or indexed government debt as % of gross government debt."},
+        "gross_general_govt_debt": {
+            "label": "Gross general government debt (% of GDP, 3-year centred average)",
+            "coefficient": -0.023,
+            "weight": 9.2,
+            "help": "Gross general government debt, centred three-year average.",
+        },
+        "general_govt_interest_revenue": {
+            "label": "General government interest (% of revenues, 3-year centred average)",
+            "coefficient": -0.044,
+            "weight": 4.6,
+            "help": "General government interest expenditures as % of revenues.",
+        },
+        "general_govt_fiscal_balance": {
+            "label": "General government fiscal balance (% of GDP, 3-year centred average)",
+            "coefficient": 0.039,
+            "weight": 2.1,
+            "help": "General government fiscal balance, centred three-year average.",
+        },
+        "fc_govt_debt_share": {
+            "label": "Foreign-currency government debt (% of gross government debt, 3-year centred average)",
+            "coefficient": -0.008,
+            "weight": 3.2,
+            "help": "Foreign-currency or indexed government debt as % of gross government debt.",
+        },
     },
     "external": {
-        "reserve_currency_flexibility": {"label": "Reserve-currency flexibility (SRM transformed value)", "coefficient": 0.484, "weight": 7.1, "help": "Enter the SRM-ready value. Use 0 if the sovereign has no reserve-currency flexibility."},
-        "sovereign_net_foreign_assets": {"label": "Sovereign net foreign assets (% of GDP, three-year centred average)", "coefficient": 0.010, "weight": 7.5, "help": "Three-year centred average of sovereign net foreign assets % of GDP."},
-        "commodity_dependence": {"label": "Commodity dependence (% of current external receipts)", "coefficient": -0.003, "weight": 1.0, "help": "Non-manufactured merchandise exports as % of current external receipts."},
-        "fx_reserves_months_cxp": {"label": "Official FX reserves (months of CXP) - only for non-reserve-currency sovereigns", "coefficient": 0.021, "weight": 1.2, "help": "For reserve-currency sovereigns, this variable is typically set to zero in the SRM."},
-        "external_interest_service": {"label": "External interest service (% of current external receipts, three-year centred average)", "coefficient": -0.004, "weight": 0.2, "help": "Three-year centred average."},
-        "cab_plus_net_fdi": {"label": "Current account balance + net inward FDI (% of GDP, three-year centred average)", "coefficient": 0.004, "weight": 0.4, "help": "Three-year centred average."},
+        "reserve_currency_flexibility": {
+            "label": "Reserve-currency flexibility (SRM transformed value)",
+            "coefficient": 0.484,
+            "weight": 7.1,
+            "help": "Use 0 if the sovereign has no reserve-currency flexibility.",
+        },
+        "sovereign_net_foreign_assets": {
+            "label": "Sovereign net foreign assets (% of GDP, 3-year centred average)",
+            "coefficient": 0.010,
+            "weight": 7.5,
+            "help": "Three-year centred average of sovereign net foreign assets.",
+        },
+        "commodity_dependence": {
+            "label": "Commodity dependence (% of current external receipts)",
+            "coefficient": -0.003,
+            "weight": 1.0,
+            "help": "Non-manufactured merchandise exports as % of current external receipts.",
+        },
+        "fx_reserves_months_cxp": {
+            "label": "Official FX reserves (months of CXP) - for non-reserve-currency sovereigns",
+            "coefficient": 0.021,
+            "weight": 1.2,
+            "help": "Usually set to 0 if reserve-currency flexibility is above 0.",
+        },
+        "external_interest_service": {
+            "label": "External interest service (% of current external receipts, 3-year centred average)",
+            "coefficient": -0.004,
+            "weight": 0.2,
+            "help": "Three-year centred average.",
+        },
+        "cab_plus_net_fdi": {
+            "label": "Current account balance + net inward FDI (% of GDP, 3-year centred average)",
+            "coefficient": 0.004,
+            "weight": 0.4,
+            "help": "Three-year centred average.",
+        },
     },
 }
 
@@ -49,40 +142,26 @@ PILLAR_LABELS = {
 }
 
 QO_FACTORS = {
-    "structural": ["Political stability and capacity", "Financial sector risks", "Other structural factors"],
-    "macro": ["Macroeconomic policy credibility and flexibility", "GDP growth outlook", "Macroeconomic stability / imbalances"],
-    "public_finances": ["Fiscal financing flexibility", "Public debt sustainability", "Fiscal structure"],
-    "external": ["External financing flexibility", "External debt sustainability", "Vulnerability to shocks"],
-}
-
-RATING_SCALE_NUMERIC = {
-    16: "AAA", 15: "AA+", 14: "AA", 13: "AA-", 12: "A+", 11: "A", 10: "A-",
-    9: "BBB+", 8: "BBB", 7: "BBB-", 6: "BB+", 5: "BB", 4: "BB-", 3: "B+",
-    2: "B", 1: "B-"
-}
-
-LONG_TERM_SCALE = [
-    "AAA", "AA+", "AA", "AA-", "A+", "A", "A-", "BBB+", "BBB", "BBB-",
-    "BB+", "BB", "BB-", "B+", "B", "B-", "CCC+", "CCC", "CCC-", "CC", "C", "RD", "D"
-]
-
-ST_MAPPING_OPTIONS = {
-    "AAA": ("F1+", "F1+"), "AA+": ("F1+", "F1+"), "AA": ("F1+", "F1+"), "AA-": ("F1+", "F1+"),
-    "A+": ("F1", "F1+"), "A": ("F1", "F1+"), "A-": ("F2", "F1"), "BBB+": ("F2", "F1"),
-    "BBB": ("F3", "F2"), "BBB-": ("F3", "F3"), "BB+": ("B", "B"), "BB": ("B", "B"),
-    "BB-": ("B", "B"), "B+": ("B", "B"), "B": ("B", "B"), "B-": ("B", "B"),
-    "CCC+": ("C", "C"), "CCC": ("C", "C"), "CCC-": ("C", "C"), "CC": ("C", "C"),
-    "C": ("C", "C"), "RD": ("C/RD/D", "C/RD/D"), "D": ("D", "D")
-}
-
-RR_OPTIONS = ["RR1", "RR2", "RR3", "RR4", "RR5", "RR6"]
-INSTRUMENT_RATING_TABLE = {
-    "RR1": {"B+": "BB-", "B": "B+", "B-": "B", "CCC+": "B-", "CCC": "CCC+", "CCC-": "CCC", "CC": "CC", "C/RD": "CC"},
-    "RR2": {"B+": "BB-", "B": "B+", "B-": "B", "CCC+": "B-", "CCC": "CCC+", "CCC-": "CCC", "CC": "CCC-", "C/RD": "CCC-"},
-    "RR3": {"B+": "BB-", "B": "B+", "B-": "B", "CCC+": "B-", "CCC": "CCC+", "CCC-": "CCC", "CC": "CCC-", "C/RD": "CC"},
-    "RR4": {"B+": "B+", "B": "B", "B-": "B-", "CCC+": "CCC+", "CCC": "CCC", "CCC-": "CCC-", "CC": "CC", "C/RD": "C"},
-    "RR5": {"B+": "B", "B": "B-", "B-": "CCC+", "CCC+": "CCC", "CCC": "CCC-", "CCC-": "CC", "CC": "C", "C/RD": "C"},
-    "RR6": {"B+": "B-", "B": "CCC+", "B-": "CCC", "CCC+": "CCC-", "CCC": "CC", "CCC-": "C", "CC": "C", "C/RD": "C"},
+    "structural": [
+        "Political stability and capacity",
+        "Financial sector risks",
+        "Other structural factors",
+    ],
+    "macro": [
+        "Macroeconomic policy credibility and flexibility",
+        "GDP growth outlook",
+        "Macroeconomic stability / imbalances",
+    ],
+    "public_finances": [
+        "Fiscal financing flexibility",
+        "Public debt sustainability",
+        "Fiscal structure",
+    ],
+    "external": [
+        "External financing flexibility",
+        "External debt sustainability",
+        "Vulnerability to shocks",
+    ],
 }
 
 QO_GUIDANCE = {
@@ -93,7 +172,77 @@ QO_GUIDANCE = {
     -2: "Exceptionally weak features relative to SRM data and output",
 }
 
+RATING_SCALE_NUMERIC = {
+    16: "AAA", 15: "AA+", 14: "AA", 13: "AA-",
+    12: "A+", 11: "A", 10: "A-",
+    9: "BBB+", 8: "BBB", 7: "BBB-",
+    6: "BB+", 5: "BB", 4: "BB-",
+    3: "B+", 2: "B", 1: "B-"
+}
 
+LONG_TERM_SCALE = [
+    "AAA", "AA+", "AA", "AA-",
+    "A+", "A", "A-",
+    "BBB+", "BBB", "BBB-",
+    "BB+", "BB", "BB-",
+    "B+", "B", "B-",
+    "CCC+", "CCC", "CCC-", "CC", "C", "RD", "D"
+]
+
+ST_MAPPING_OPTIONS = {
+    "AAA": ("F1+", "F1+"),
+    "AA+": ("F1+", "F1+"),
+    "AA": ("F1+", "F1+"),
+    "AA-": ("F1+", "F1+"),
+    "A+": ("F1", "F1+"),
+    "A": ("F1", "F1+"),
+    "A-": ("F2", "F1"),
+    "BBB+": ("F2", "F1"),
+    "BBB": ("F3", "F2"),
+    "BBB-": ("F3", "F3"),
+    "BB+": ("B", "B"),
+    "BB": ("B", "B"),
+    "BB-": ("B", "B"),
+    "B+": ("B", "B"),
+    "B": ("B", "B"),
+    "B-": ("B", "B"),
+    "CCC+": ("C", "C"),
+    "CCC": ("C", "C"),
+    "CCC-": ("C", "C"),
+    "CC": ("C", "C"),
+    "C": ("C", "C"),
+    "RD": ("C/RD/D", "C/RD/D"),
+    "D": ("D", "D"),
+}
+
+# -----------------------------
+# Validation rules (soft + hard)
+# -----------------------------
+VARIABLE_RULES = {
+    "governance_indicator": {"step": 0.1, "soft_min": 0, "soft_max": 100},
+    "gdp_per_capita_percentile": {"step": 0.1, "soft_min": 0, "soft_max": 100},
+    "share_world_gdp_log": {"step": 0.1, "soft_min": -20, "soft_max": 5},
+    "years_since_default_transform": {"step": 0.01, "soft_min": 0, "soft_max": 5},
+    "money_supply_log": {"step": 0.1, "soft_min": -5, "soft_max": 10},
+    "real_gdp_growth_volatility_log": {"step": 0.1, "soft_min": -5, "soft_max": 10},
+    "consumer_price_inflation": {"step": 0.1, "soft_min": -100, "soft_max": 500},
+    "real_gdp_growth": {"step": 0.1, "soft_min": -20, "soft_max": 20},
+    "gross_general_govt_debt": {"step": 0.1, "soft_min": 0, "soft_max": 500},
+    "general_govt_interest_revenue": {"step": 0.1, "soft_min": 0, "soft_max": 100},
+    "general_govt_fiscal_balance": {"step": 0.1, "soft_min": -50, "soft_max": 50},
+    "fc_govt_debt_share": {"step": 0.1, "soft_min": 0, "soft_max": 100},
+    "reserve_currency_flexibility": {"step": 0.1, "soft_min": 0, "soft_max": 20},
+    "sovereign_net_foreign_assets": {"step": 0.1, "soft_min": -300, "soft_max": 300},
+    "commodity_dependence": {"step": 0.1, "soft_min": 0, "soft_max": 100},
+    "fx_reserves_months_cxp": {"step": 0.1, "soft_min": 0, "soft_max": 60},
+    "external_interest_service": {"step": 0.1, "soft_min": 0, "soft_max": 100},
+    "cab_plus_net_fdi": {"step": 0.1, "soft_min": -30, "soft_max": 30},
+}
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
 def show_image(path: Path, caption: str | None = None):
     try:
         st.image(str(path), caption=caption, use_container_width=True)
@@ -143,7 +292,8 @@ def approx_years_since_default_transform(years_since_event: float | None, no_eve
 
 
 def compute_srm(inputs: dict[str, float]) -> tuple[float, list[dict]]:
-    details, total = [], INTERCEPT
+    details = []
+    total = INTERCEPT
     for pillar_key, vars_dict in SRM_VARIABLES.items():
         for var_key, meta in vars_dict.items():
             value = float(inputs.get(var_key, 0.0))
@@ -166,11 +316,6 @@ def compute_srm(inputs: dict[str, float]) -> tuple[float, list[dict]]:
     return total, details
 
 
-def debt_instrument_rating(base_idr: str, rr: str) -> str:
-    key = "C/RD" if base_idr in {"C", "RD", "D"} else base_idr
-    return INSTRUMENT_RATING_TABLE.get(rr, {}).get(key, base_idr)
-
-
 def build_radar(srm_score: float, qo_total: int, final_score: float):
     categories = ["SRM score", "QO total", "Final model score"]
     values = [srm_score, qo_total, final_score]
@@ -181,6 +326,50 @@ def build_radar(srm_score: float, qo_total: int, final_score: float):
     return fig
 
 
+def safe_number_input(var_key: str, label: str, default: float, help_text: str):
+    rule = VARIABLE_RULES.get(var_key, {"step": 0.1})
+    return st.number_input(
+        label,
+        value=float(default),
+        step=float(rule.get("step", 0.1)),
+        key=var_key,
+        help=help_text,
+    )
+
+
+def validate_inputs(inputs: dict[str, float]) -> list[str]:
+    warnings = []
+
+    for var_key, value in inputs.items():
+        rule = VARIABLE_RULES.get(var_key)
+        if not rule:
+            continue
+        soft_min = rule.get("soft_min")
+        soft_max = rule.get("soft_max")
+
+        if soft_min is not None and value < soft_min:
+            warnings.append(f"**{var_key}** está abaixo da faixa esperada ({value:.2f} < {soft_min}).")
+        if soft_max is not None and value > soft_max:
+            warnings.append(f"**{var_key}** está acima da faixa esperada ({value:.2f} > {soft_max}).")
+
+    if inputs.get("reserve_currency_flexibility", 0) > 0 and inputs.get("fx_reserves_months_cxp", 0) != 0:
+        warnings.append("`reserve_currency_flexibility > 0` normalmente implica `fx_reserves_months_cxp = 0` no SRM.")
+
+    if inputs.get("governance_indicator", 0) > 100 or inputs.get("gdp_per_capita_percentile", 0) > 100:
+        warnings.append("Percentis normalmente devem ficar entre 0 e 100.")
+
+    if inputs.get("fc_govt_debt_share", 0) > 100:
+        warnings.append("`fc_govt_debt_share` normalmente não deve ultrapassar 100%.")
+
+    if inputs.get("commodity_dependence", 0) > 100:
+        warnings.append("`commodity_dependence` normalmente não deve ultrapassar 100%.")
+
+    return warnings
+
+
+# -----------------------------
+# State
+# -----------------------------
 def init_state():
     defaults = {
         "governance_indicator": 50.0,
@@ -208,25 +397,31 @@ def init_state():
         "qo_crisis_extension": False,
         "lc_manual_adjust": 0,
         "fc_robust_liquidity": False,
-        "rr_choice": "RR4",
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
 
 
+# -----------------------------
+# Pages
+# -----------------------------
 def page_overview():
-    st.title("Fitch Sovereign Rating Criteria – Interactive Tool")
-    st.caption("Public-criteria Streamlit app based on Fitch's 15 September 2025 Sovereign Rating Criteria.")
+    st.title("Fitch Sovereign Methodology")
+    st.caption("Blindada: SRM + QO + Results com validações leves de entrada.")
 
     col1, col2 = st.columns([1.1, 0.9])
     with col1:
         st.markdown(
             """
-### What this app does
-- Uses the **Sovereign Rating Model (SRM)** as the starting point.
-- Applies a **Qualitative Overlay (QO)** by the four Fitch analytical pillars.
-- Produces a **model-implied LT FC IDR starting point**, then lets you derive LC/ST ratings.
-- Includes a **debt instrument / recovery** page for sovereign bonds at lower rating levels.
+### Included
+- SRM starting point
+- QO by the 4 Fitch analytical pillars
+- LT FC / LT LC / ST FC / ST LC output
+- Input validation and consistency checks
+
+### Notes
+- Uses SRM-ready inputs where Fitch public criteria describe transformed variables
+- Treat outputs at **CCC+ or below** as model guidance only
             """
         )
     with col2:
@@ -234,56 +429,59 @@ def page_overview():
         if img.exists():
             show_image(img, "Optional local summary image")
         else:
-            st.info("No local image found in assets/. The app works without images.")
-
-    with st.expander("Implementation notes", expanded=True):
-        st.markdown(
-            """
-- Some public Fitch SRM variables are already transformed.
-- Where public criteria do not provide a fully operational constant or live comparator dataset, this app uses SRM-ready inputs.
-- The years-since-default helper is an approximation.
-- If the proposed LT FC IDR is CCC+ or below, treat the output as model guidance only.
-            """
-        )
+            st.info("No local image found in assets/.")
 
 
 def page_srm_inputs(pillar: str):
     st.title(PILLAR_LABELS[pillar])
-    st.caption("Enter SRM-ready values for the variables in this analytical pillar.")
+    st.caption("Enter SRM-ready values for this pillar.")
 
     if pillar == "structural":
-        with st.expander("Helper: transform raw values into SRM-style inputs", expanded=False):
+        with st.expander("Helpers", expanded=False):
             share_pct = st.number_input("Share in world GDP (% share, raw)", min_value=0.000001, value=0.5, step=0.1, key="helper_share_world_pct")
-            st.write(f"Natural log(% share) ≈ **{math.log(max(share_pct, 1e-9)):.4f}**")
+            st.write(f"log(% share) ≈ **{math.log(max(share_pct, 1e-9)):.4f}**")
             broad_money_pct = st.number_input("Broad money (% of GDP, raw)", min_value=0.0001, value=60.0, step=1.0, key="helper_broad_money")
-            st.write(f"Natural log(broad money % GDP) ≈ **{math.log(max(broad_money_pct, 1e-9)):.4f}**")
+            st.write(f"log(broad money % GDP) ≈ **{math.log(max(broad_money_pct, 1e-9)):.4f}**")
             no_event = st.checkbox("No default/restructuring event after 1980", value=True, key="helper_no_event")
             yrs = st.number_input("Years since last default/restructuring event", min_value=0.0, value=0.0, step=1.0, key="helper_years_since_event")
             approx = approx_years_since_default_transform(yrs, no_event)
-            st.write(f"Approximate transformed value ≈ **{approx:.4f}**")
+            st.write(f"Approx transformed value ≈ **{approx:.4f}**")
+            if st.button("Use approximate transformed value", key="use_years_transform"):
+                st.session_state["years_since_default_transform"] = approx
 
     if pillar == "macro":
-        with st.expander("Helper: transform raw volatility into SRM-style log input", expanded=False):
-            vol_raw = st.number_input("Real GDP growth volatility (raw standard deviation)", min_value=0.0001, value=3.0, step=0.1, key="helper_real_gdp_vol")
-            st.write(f"Natural log(volatility) ≈ **{math.log(max(vol_raw, 1e-9)):.4f}**")
+        with st.expander("Helper: volatility log", expanded=False):
+            vol_raw = st.number_input("Real GDP growth volatility (raw std. dev.)", min_value=0.0001, value=3.0, step=0.1, key="helper_real_gdp_vol")
+            st.write(f"log(volatility) ≈ **{math.log(max(vol_raw, 1e-9)):.4f}**")
 
     if pillar == "external":
-        with st.expander("Helper notes for external inputs", expanded=False):
+        with st.expander("External notes", expanded=False):
             st.markdown(
                 """
-- **Reserve-currency flexibility**: use 0 if the sovereign has no reserve-currency flexibility.
-- **FX reserves (months of CXP)** applies only to sovereigns without reserve-currency flexibility.
+- `reserve_currency_flexibility > 0` normalmente implica `fx_reserves_months_cxp = 0` no SRM.
+- `commodity_dependence` e percentuais semelhantes normalmente não devem ultrapassar 100.
                 """
             )
 
     rows = []
     for var_key, meta in SRM_VARIABLES[pillar].items():
-        default = float(st.session_state.get(var_key, 0.0))
-        value = st.number_input(meta["label"], value=default, step=0.1, key=var_key, help=meta["help"])
+        value = safe_number_input(var_key, meta["label"], st.session_state.get(var_key, 0.0), meta["help"])
+
         if var_key == "consumer_price_inflation":
-            value = min(50.0, max(2.0, float(value)))
-            st.caption(f"Inflation used by SRM after truncation: **{value:.2f}%**")
-            st.session_state[var_key] = value
+            clipped = min(50.0, max(2.0, float(value)))
+            if clipped != float(value):
+                st.warning(f"{meta['label']} foi ajustada automaticamente para {clipped:.2f}%, conforme a regra pública 2%-50%.")
+            value = clipped
+            st.session_state[var_key] = clipped
+
+        rule = VARIABLE_RULES.get(var_key, {})
+        soft_min = rule.get("soft_min")
+        soft_max = rule.get("soft_max")
+        if soft_min is not None and value < soft_min:
+            st.warning(f"{meta['label']} está abaixo da faixa esperada ({value:.2f} < {soft_min}).")
+        if soft_max is not None and value > soft_max:
+            st.warning(f"{meta['label']} está acima da faixa esperada ({value:.2f} > {soft_max}).")
+
         rows.append({
             "Variable": meta["label"],
             "Coefficient": meta["coefficient"],
@@ -299,36 +497,28 @@ def page_srm_inputs(pillar: str):
 
 def page_qo():
     st.title("Qualitative Overlay (QO)")
-    st.caption("Apply Fitch QO notching by analytical pillar. Typical overall cap: +3/-3, except exceptional circumstances.")
+    st.caption("QO by analytical pillar. Typical overall cap: +3/-3.")
 
     cols = st.columns(4)
     pillar_keys = ["structural", "macro", "public_finances", "external"]
+
     for col, pillar_key in zip(cols, pillar_keys):
         with col:
             st.subheader(PILLAR_LABELS[pillar_key].split(". ", 1)[-1])
             for item in QO_FACTORS[pillar_key]:
                 st.markdown(f"- {item}")
             choice = st.selectbox(
-                f"QO notch adjustment – {PILLAR_LABELS[pillar_key]}",
+                f"QO notch – {PILLAR_LABELS[pillar_key]}",
                 options=[2, 1, 0, -1, -2],
                 index=[2, 1, 0, -1, -2].index(st.session_state.get(f"qo_{pillar_key}", 0)),
                 key=f"qo_{pillar_key}",
                 format_func=lambda x: f"{x:+d} — {QO_GUIDANCE[x]}",
             )
-            st.caption(QO_GUIDANCE[choice])
-            st.text_area("Rationale", key=f"qo_note_{pillar_key}", height=100)
+            st.text_area("Rationale", key=f"qo_note_{pillar_key}", height=90)
 
-    crisis = st.checkbox(
-        "Allow overall QO to exceed +3/-3 in exceptional circumstances",
-        key="qo_crisis_extension",
-    )
+    crisis = st.checkbox("Allow overall QO to exceed +3/-3 in exceptional circumstances", key="qo_crisis_extension")
 
-    raw = {
-        "structural": int(st.session_state.get("qo_structural", 0)),
-        "macro": int(st.session_state.get("qo_macro", 0)),
-        "public_finances": int(st.session_state.get("qo_public_finances", 0)),
-        "external": int(st.session_state.get("qo_external", 0)),
-    }
+    raw = {k: int(st.session_state.get(f"qo_{k}", 0)) for k in pillar_keys}
     qo_total = clamp_qo(raw, crisis_extension=crisis)
 
     c1, c2 = st.columns(2)
@@ -340,8 +530,10 @@ def page_qo():
 
 def page_results():
     st.title("Results")
+
     srm_inputs = {k: float(st.session_state.get(k, 0.0)) for pillar in SRM_VARIABLES.values() for k in pillar.keys()}
     srm_score, details = compute_srm(srm_inputs)
+
     qo_raw = {
         "structural": int(st.session_state.get("qo_structural", 0)),
         "macro": int(st.session_state.get("qo_macro", 0)),
@@ -364,7 +556,13 @@ def page_results():
     c2.metric("LT FC IDR after QO", implied_lt_fc)
 
     if implied_lt_fc == "CCC+" or final_model_score <= 0:
-        st.warning("If the proposed LT FC IDR is CCC+ or below, treat the output as model guidance only.")
+        st.warning("Output at CCC+ or below should be treated as model guidance only.")
+
+    warnings = validate_inputs(srm_inputs)
+    if warnings:
+        with st.expander("Warnings / consistency checks", expanded=True):
+            for w in warnings:
+                st.warning(w)
 
     lc_adjust = st.selectbox(
         "Manual LC rating notch difference versus FC",
@@ -375,10 +573,7 @@ def page_results():
     )
     lt_lc = apply_notches(implied_lt_fc, lc_adjust)
 
-    robust_liquidity = st.checkbox(
-        "Use higher short-term FC mapping option",
-        key="fc_robust_liquidity",
-    )
+    robust_liquidity = st.checkbox("Use higher short-term FC mapping option", key="fc_robust_liquidity")
     st_fc = map_short_term(implied_lt_fc, robust_liquidity)
     st_lc = map_short_term(lt_lc, True)
 
@@ -404,39 +599,14 @@ def page_results():
         "st_fc_idr": st_fc,
         "st_lc_idr": st_lc,
         "qo_notes": {k: st.session_state.get(f"qo_note_{k}", "") for k in qo_raw.keys()},
+        "warnings": warnings,
     }
     st.download_button(
         "Download JSON snapshot",
         data=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
-        file_name="fitch_sovereign_methodology_snapshot.json",
+        file_name="fitch_srm_qo_snapshot.json",
         mime="application/json",
     )
-
-
-def page_instruments():
-    st.title("Debt Instruments and Recovery")
-    st.caption("For lower ratings, recovery notching can apply.")
-
-    lt_base = st.selectbox(
-        "Base long-term rating for the instrument analysis",
-        options=["B+", "B", "B-", "CCC+", "CCC", "CCC-", "CC", "C/RD"],
-        index=0,
-        key="instrument_base_rating",
-    )
-    rr = st.selectbox("Recovery Rating", RR_OPTIONS, index=RR_OPTIONS.index(st.session_state.get("rr_choice", "RR4")), key="rr_choice")
-
-    instrument_rating = debt_instrument_rating(lt_base, rr)
-    c1, c2 = st.columns(2)
-    c1.metric("Base issuer rating", lt_base)
-    c2.metric("Illustrative instrument rating", instrument_rating)
-
-    table_rows = []
-    for rr_name in RR_OPTIONS:
-        row = {"RR": rr_name}
-        for base in ["B+", "B", "B-", "CCC+", "CCC", "CCC-", "CC", "C/RD"]:
-            row[base] = debt_instrument_rating(base, rr_name)
-        table_rows.append(row)
-    st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
 
 def main():
@@ -453,7 +623,6 @@ def main():
             PILLAR_LABELS["external"],
             "Qualitative Overlay (QO)",
             "Results",
-            "Debt Instruments and Recovery",
         ],
     )
 
@@ -471,8 +640,6 @@ def main():
         page_qo()
     elif page == "Results":
         page_results()
-    elif page == "Debt Instruments and Recovery":
-        page_instruments()
 
 
 if __name__ == "__main__":
