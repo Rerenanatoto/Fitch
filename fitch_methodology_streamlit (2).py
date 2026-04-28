@@ -2,6 +2,7 @@ import io
 import json
 import math
 import re
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from openpyxl import Workbook
+from openpyxl.chart import LineChart, Reference
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 st.set_page_config(page_title="Fitch Sovereign Methodology + Comparator", layout="wide")
 
@@ -401,347 +405,6 @@ def build_radar(srm_score: float, qo_total: int, final_score: float):
 
 
 # ============================================================
-# Comparator / SRI  –  leitura, filtro, dashboards, export
-# ============================================================
-
-DATA_DIR = APP_DIR / "data"
-META_COLS = ["country_name", "country_code", "lt_fc_rating"]
-
-
-def _normalize_label(text: str) -> str:
-    text = str(text).strip()
-    text = re.sub(r"\s+", " ", text)
-    return text
-
-
-def _slugify(text: str) -> str:
-    text = _normalize_label(text).lower()
-    text = text.replace("&", " and ")
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    text = re.sub(r"_+", "_", text).strip("_")
-    return text
-
-
-def _coerce_numeric(series: pd.Series) -> pd.Series:
-    s = series.astype(str).str.strip()
-    s = s.replace({
-        "N/A": np.nan, "N.M.": np.nan, "NM": np.nan,
-        "None": np.nan, "nan": np.nan, "": np.nan,
-    })
-    return pd.to_numeric(s, errors="coerce")
-
-
-def _find_data_end(raw: pd.DataFrame) -> int:
-    first_col = raw.iloc[:, 0].astype(str).fillna("").str.strip().str.lower()
-    end_idx = len(raw)
-    for idx, value in enumerate(first_col):
-        if (value.startswith("lt fc--") or value.startswith("copyright")
-                or value.startswith("no content") or value.startswith("credit-related")
-                or value.startswith("to reprint") or value.startswith("any passwords/user ids")):
-            end_idx = idx
-            break
-    return end_idx
-
-
-def _parse_sheet(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
-    raw = raw.copy().dropna(how="all", axis=1)
-    if len(raw) < 6:
-        return pd.DataFrame()
-    end_idx = _find_data_end(raw)
-    raw = raw.iloc[:end_idx].reset_index(drop=True)
-    if len(raw) < 6:
-        return pd.DataFrame()
-    indicator_row = raw.iloc[3].tolist()
-    year_row = raw.iloc[4].tolist()
-    records = []
-    current_indicator = None
-    for col_idx, cell in enumerate(indicator_row):
-        if col_idx < 3:
-            continue
-        if pd.notna(cell):
-            current_indicator = _normalize_label(cell)
-        year_value = year_row[col_idx] if col_idx < len(year_row) else None
-        if current_indicator and pd.notna(year_value):
-            records.append({
-                "col_idx": col_idx,
-                "indicator": current_indicator,
-                "indicator_key": _slugify(current_indicator),
-                "year": str(year_value).strip(),
-            })
-    if not records:
-        return pd.DataFrame()
-    col_map = pd.DataFrame(records)
-    data = raw.iloc[5:].copy().dropna(how="all")
-    if data.empty:
-        return pd.DataFrame()
-    rename_map = {}
-    if 0 in data.columns:
-        rename_map[0] = "country_name"
-    if 1 in data.columns:
-        rename_map[1] = "country_code"
-    if 2 in data.columns:
-        rename_map[2] = "lt_fc_rating"
-    data = data.rename(columns=rename_map)
-    required_cols = ["country_name", "country_code", "lt_fc_rating"]
-    if not all(col in data.columns for col in required_cols):
-        return pd.DataFrame()
-    usable_cols = [c for c in col_map["col_idx"].tolist() if c in data.columns]
-    if not usable_cols:
-        return pd.DataFrame()
-    col_map = col_map[col_map["col_idx"].isin(usable_cols)].copy()
-    data = data[required_cols + usable_cols].copy()
-    data["country_name"] = data["country_name"].astype(str).str.strip()
-    data["country_code"] = data["country_code"].astype(str).str.strip()
-    data["lt_fc_rating"] = data["lt_fc_rating"].astype(str).str.strip()
-    invalid_starts = ("lt fc--", "copyright", "no content")
-    data = data[
-        data["country_name"].ne("")
-        & ~data["country_name"].str.lower().str.startswith(invalid_starts)
-    ].copy()
-    if data.empty:
-        return pd.DataFrame()
-    long_df = data.melt(
-        id_vars=required_cols,
-        value_vars=usable_cols,
-        var_name="col_idx",
-        value_name="value_raw",
-    )
-    long_df = long_df.merge(col_map, on="col_idx", how="left")
-    long_df["sheet"] = sheet_name
-    long_df["sheet_key"] = _slugify(sheet_name)
-    long_df["value"] = _coerce_numeric(long_df["value_raw"])
-    long_df["year"] = long_df["year"].astype(str).str.strip()
-    long_df["year_num"] = pd.to_numeric(
-        long_df["year"].str.extract(r"(\d{4})")[0], errors="coerce"
-    )
-    long_df["is_forecast"] = long_df["year"].str.contains(r"[ef]$", case=False, na=False)
-    return long_df[[
-        "sheet", "sheet_key", "country_name", "country_code", "lt_fc_rating",
-        "indicator", "indicator_key", "year", "year_num", "is_forecast", "value"
-    ]]
-
-
-def _find_local_xlsx() -> "Path | None":
-    """Search for .xlsx or .xlsb files in DATA_DIR / APP_DIR."""
-    preferred = [
-        DATA_DIR / "base.xlsx", DATA_DIR / "report.xlsx",
-        DATA_DIR / "base.xlsb", DATA_DIR / "report.xlsb",
-        APP_DIR / "base.xlsx", APP_DIR / "report.xlsx",
-        APP_DIR / "base.xlsb", APP_DIR / "report.xlsb",
-    ]
-    for candidate in preferred:
-        if candidate.exists():
-            return candidate
-    for search_dir in [DATA_DIR, APP_DIR]:
-        if search_dir.exists():
-            files = sorted([
-                p for p in search_dir.iterdir()
-                if p.suffix.lower() in (".xlsx", ".xlsb")
-                and not p.name.startswith("~$")
-            ])
-            if files:
-                return files[0]
-    return None
-
-
-def _detect_engine(source) -> str:
-    """Return 'pyxlsb' for .xlsb files, 'openpyxl' otherwise."""
-    if isinstance(source, (str, Path)):
-        return "pyxlsb" if str(source).lower().endswith(".xlsb") else "openpyxl"
-    return "openpyxl"          # BytesIO → assume xlsx by default
-
-
-def _detect_engine_from_bytes(header: bytes) -> str:
-    """Peek at magic bytes inside the ZIP/CFB to decide engine.
-
-    .xlsb is an OLE/CFB compound file (magic: \xd0\xcf\x11\xe0)
-    .xlsx is a ZIP   (magic: PK / \x50\x4b)
-    """
-    if header[:4] == b"\xd0\xcf\x11\xe0":
-        return "pyxlsb"
-    return "openpyxl"
-
-
-@st.cache_data(show_spinner=False)
-def load_comparator_workbook(file_bytes=None, file_name: str = "") -> pd.DataFrame:
-    """Load a .xlsx or .xlsb workbook into a long-format DataFrame."""
-    empty = pd.DataFrame(columns=[
-        "sheet", "sheet_key", "country_name", "country_code", "lt_fc_rating",
-        "indicator", "indicator_key", "year", "year_num", "is_forecast", "value"
-    ])
-
-    if file_bytes is not None:
-        source = io.BytesIO(file_bytes)
-        if file_name.lower().endswith(".xlsb"):
-            engine = "pyxlsb"
-        else:
-            engine = _detect_engine_from_bytes(file_bytes[:8])
-    else:
-        local_file = _find_local_xlsx()
-        if local_file is None:
-            return empty
-        source = local_file
-        engine = _detect_engine(source)
-
-    xls = pd.ExcelFile(source, engine=engine)
-    frames = []
-    for sheet in xls.sheet_names:
-        raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine=engine)
-        try:
-            parsed = _parse_sheet(raw, sheet)
-            if not parsed.empty:
-                frames.append(parsed)
-        except Exception:
-            continue
-    if not frames:
-        return empty
-    df = pd.concat(frames, ignore_index=True)
-    return df.dropna(subset=["indicator", "year"])
-
-
-def build_comparator_filters(df: pd.DataFrame) -> pd.DataFrame:
-    st.subheader("Filtros do Comparator")
-    all_categories = sorted(df["sheet"].dropna().unique().tolist())
-    selected_categories = st.multiselect(
-        "Categoria", options=all_categories, default=all_categories,
-        key="comp_f_categories",
-    )
-    df1 = df[df["sheet"].isin(selected_categories)] if selected_categories else df.copy()
-
-    all_ratings = sorted(df1["lt_fc_rating"].dropna().unique().tolist())
-    selected_ratings = st.multiselect(
-        "LT FC rating", options=all_ratings, default=[], key="comp_f_ratings",
-    )
-    df2 = df1[df1["lt_fc_rating"].isin(selected_ratings)] if selected_ratings else df1.copy()
-
-    all_countries = sorted(df2["country_name"].dropna().unique().tolist())
-    selected_countries = st.multiselect(
-        "País", options=all_countries, default=[], key="comp_f_countries",
-    )
-
-    all_indicators = sorted(df2["indicator"].dropna().unique().tolist())
-    selected_indicators = st.multiselect(
-        "Indicadores", options=all_indicators, default=[], key="comp_f_indicators",
-    )
-
-    valid_years = df2["year_num"].dropna()
-    yr_min = int(valid_years.min()) if not valid_years.empty else 2019
-    yr_max = int(valid_years.max()) if not valid_years.empty else 2028
-    selected_year_range = st.slider(
-        "Faixa de anos", min_value=yr_min, max_value=yr_max,
-        value=(yr_min, yr_max), key="comp_f_years",
-    )
-
-    forecast_mode = st.radio(
-        "Período",
-        ["Todos", "Somente históricos", "Somente estimativas/projeções"],
-        index=0, key="comp_f_forecast", horizontal=True,
-    )
-
-    filtered = df2.copy()
-    if selected_countries:
-        filtered = filtered[filtered["country_name"].isin(selected_countries)]
-    if selected_indicators:
-        filtered = filtered[filtered["indicator"].isin(selected_indicators)]
-    filtered = filtered[
-        filtered["year_num"].between(selected_year_range[0], selected_year_range[1], inclusive="both")
-    ]
-    if forecast_mode == "Somente históricos":
-        filtered = filtered[~filtered["is_forecast"]]
-    elif forecast_mode == "Somente estimativas/projeções":
-        filtered = filtered[filtered["is_forecast"]]
-    return filtered
-
-
-def render_comparator_dashboard(df: pd.DataFrame):
-    st.subheader("Dashboards")
-    if df.empty:
-        st.warning("Nenhum dado encontrado com os filtros selecionados.")
-        return
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Países", df["country_name"].nunique())
-    c2.metric("Indicadores", df["indicator"].nunique())
-    c3.metric("Observações", f"{len(df):,}".replace(",", "."))
-
-    available_sheets = sorted(df["sheet"].dropna().unique().tolist())
-    if not available_sheets:
-        st.info("Nenhuma aba disponível para plotagem com os filtros atuais.")
-        return
-
-    if len(available_sheets) == 1:
-        sheet_for_charts = available_sheets[0]
-    else:
-        sheet_for_charts = st.selectbox(
-            "Aba para gerar gráficos", available_sheets, index=0, key="comp_sheet_charts",
-        )
-
-    plot_df = df[df["sheet"] == sheet_for_charts].copy().dropna(subset=["year_num", "value"])
-    if plot_df.empty:
-        st.info("Sem dados numéricos para gerar gráficos nesta aba.")
-        return
-
-    indicators = sorted(plot_df["indicator"].dropna().unique().tolist())
-    if not indicators:
-        return
-
-    show_legend = plot_df["country_name"].nunique() <= 12
-    for i in range(0, len(indicators), 2):
-        row_inds = indicators[i:i + 2]
-        row_cols = st.columns(2)
-        for col, ind in zip(row_cols, row_inds):
-            with col:
-                ind_df = plot_df[plot_df["indicator"] == ind].sort_values(["country_name", "year_num"])
-                if ind_df.empty:
-                    continue
-                fig = px.line(
-                    ind_df, x="year_num", y="value", color="country_name",
-                    markers=True, hover_data=["lt_fc_rating", "year", "country_code"],
-                    title=ind,
-                )
-                fig.update_layout(
-                    height=340, margin=dict(l=10, r=10, t=50, b=10),
-                    legend_title_text="País", showlegend=show_legend,
-                )
-                fig.update_xaxes(title="Ano")
-                fig.update_yaxes(title="Valor")
-                try:
-                    st.plotly_chart(fig, use_container_width=True)
-                except TypeError:
-                    st.plotly_chart(fig)
-
-
-def render_comparator_table(df: pd.DataFrame):
-    st.subheader("Dados em tabela")
-    if df.empty:
-        st.warning("Nenhum dado encontrado com os filtros selecionados.")
-        return
-    view_mode = st.radio(
-        "Visualização", ["Longa (recomendada)", "Pivotada"],
-        horizontal=True, index=0, key="comp_view_mode",
-    )
-    long_df = df.sort_values(["sheet", "country_name", "indicator", "year_num"]).copy()
-    if view_mode == "Longa (recomendada)":
-        display_df = long_df
-    else:
-        display_df = (
-            df.pivot_table(
-                index=["sheet", "country_name", "country_code", "lt_fc_rating", "indicator"],
-                columns="year", values="value", aggfunc="first",
-            ).reset_index()
-        )
-    try:
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-    except TypeError:
-        st.dataframe(display_df)
-    csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
-    st.download_button("⬇️ Baixar CSV", data=csv_data,
-                       file_name="comparator_filtrado.csv", mime="text/csv",
-                       key="comp_dl_csv")
-
-
-
-# ============================================================
 # State
 # ============================================================
 
@@ -1040,7 +703,449 @@ def page_results():
 
 
 # ============================================================
-# Main  (tabbed: Methodology + Comparator)
+# Fitch Global Sovereign Data Comparator – Parser
+# ============================================================
+
+def normalize_label(text: str) -> str:
+    text = str(text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+def slugify(text: str) -> str:
+    text = normalize_label(text).lower()
+    text = text.replace("&", " and ")
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text
+
+def coerce_numeric(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    s = s.replace({
+        "N/A": np.nan, "N.M.": np.nan, "NM": np.nan,
+        "None": np.nan, "nan": np.nan, "": np.nan,
+    })
+    return pd.to_numeric(s, errors="coerce")
+
+
+def parse_fitch_comparator(file_bytes=None) -> pd.DataFrame:
+    """Parse the Fitch Global Sovereign Data Comparator .xlsx/.xlsb format.
+    
+    Structure (single 'Data' sheet):
+      Row 5  (idx=5): section headers (forward-fill) – e.g. 'DOMESTIC ECONOMY', 'GOVERNMENT FINANCE'
+      Row 7  (idx=7): indicator names (forward-fill)
+      Row 8  (idx=8): units / detail line
+      Row 9  (idx=9): year labels (2024, 2025, 2026, '19-23 av.', etc.)
+      Row 10+ (idx>=10): data rows
+        col 0: internal Fitch key
+        col 1: rating category
+        col 2: region code
+        col 3: sub-code
+        col 4: 'COUNTRY' or 'HEADING'
+        col 5: ISO code
+        col 6: country name
+        col 7: (empty or extra)
+        col 8: LT FC IDR
+        col 9+: dates, flags, then data columns
+    """
+    empty = pd.DataFrame(columns=[
+        "section", "indicator", "indicator_detail", "country_name",
+        "country_code", "lt_fc_rating", "year", "year_num",
+        "is_forecast", "value"
+    ])
+
+    if file_bytes is not None:
+        source = io.BytesIO(file_bytes)
+    else:
+        data_dir = Path(__file__).resolve().parent / "data"
+        app_dir = Path(__file__).resolve().parent
+        candidates = list(data_dir.glob("*.xlsx")) + list(data_dir.glob("*.xlsb")) + \
+                     list(app_dir.glob("*.xlsx")) + list(app_dir.glob("*.xlsb"))
+        candidates = [p for p in candidates if not p.name.startswith("~$")]
+        if not candidates:
+            return empty
+        source = candidates[0]
+
+    # Try to read Data sheet
+    try:
+        engine = "pyxlsb" if str(source).endswith(".xlsb") or (hasattr(source, 'name') and str(source.name).endswith(".xlsb")) else "openpyxl"
+    except Exception:
+        engine = "openpyxl"
+
+    try:
+        xls = pd.ExcelFile(source, engine=engine)
+    except Exception:
+        try:
+            xls = pd.ExcelFile(source, engine="openpyxl")
+        except Exception:
+            return empty
+
+    sheet_name = None
+    for s in xls.sheet_names:
+        if s.strip().lower() == "data":
+            sheet_name = s
+            break
+    if sheet_name is None:
+        return empty
+
+    raw = pd.read_excel(xls, sheet_name=sheet_name, header=None)
+    if raw.shape[0] < 11 or raw.shape[1] < 15:
+        return empty
+
+    # --- Build column map from header rows ---
+    # Row 5: sections (forward-fill)
+    section_row = raw.iloc[5].copy()
+    section_row = section_row.where(section_row.notna()).ffill()
+
+    # Row 7: indicator names (forward-fill)
+    indicator_row = raw.iloc[7].copy()
+    indicator_row = indicator_row.where(indicator_row.notna()).ffill()
+
+    # Row 8: detail/units
+    detail_row = raw.iloc[8].copy()
+
+    # Row 9: year labels
+    year_row = raw.iloc[9].copy()
+
+    # Find which row has 'COUNTRY' in col 4 to confirm data start
+    col4 = raw.iloc[:, 4].astype(str).str.strip().str.upper() if raw.shape[1] > 4 else pd.Series()
+
+    # Determine data column range: skip metadata columns (0-based)
+    # Find the first column where section_row has a non-null, non-metadata value
+    SKIP_SECTIONS = {"RATINGS AND METADATA", "Macro", "nan", ""}
+    data_col_start = None
+    for ci in range(raw.shape[1]):
+        sec = str(section_row.iloc[ci]).strip() if pd.notna(section_row.iloc[ci]) else ""
+        if sec and sec not in SKIP_SECTIONS:
+            data_col_start = ci
+            break
+    if data_col_start is None:
+        return empty
+
+    # Build column metadata
+    col_meta = []
+    for ci in range(data_col_start, raw.shape[1]):
+        sec = str(section_row.iloc[ci]).strip() if pd.notna(section_row.iloc[ci]) else ""
+        ind = str(indicator_row.iloc[ci]).strip() if pd.notna(indicator_row.iloc[ci]) else ""
+        det = str(detail_row.iloc[ci]).strip() if pd.notna(detail_row.iloc[ci]) else ""
+        yr = str(year_row.iloc[ci]).strip() if pd.notna(year_row.iloc[ci]) else ""
+        if sec in SKIP_SECTIONS or not ind or ind == "nan" or not yr or yr == "nan":
+            continue
+        # Combine indicator + detail for uniqueness
+        full_indicator = ind
+        if det and det != "nan" and det != ind:
+            full_indicator = f"{ind} {det}"
+        col_meta.append({
+            "col_idx": ci,
+            "section": sec,
+            "indicator": normalize_label(full_indicator),
+            "indicator_detail": det if det != "nan" else "",
+            "year": yr,
+        })
+
+    if not col_meta:
+        return empty
+
+    col_map_df = pd.DataFrame(col_meta)
+
+    # --- Extract data rows ---
+    # Determine country_type column, iso column, name column, rating column
+    # Based on observed structure: col4=type, col5=ISO, col6=name
+    # LT FC IDR is in col 8
+    # But we need to find the exact columns dynamically
+    
+    # Find the row index where 'Category' or 'COUNTRY' first appears in col 4
+    type_col = 4
+    iso_col = 5
+    name_col = 6
+    
+    # Find rating column: look for "LT FC IDR" in row 7 or row 8
+    rating_col = None
+    for ci in range(raw.shape[1]):
+        val7 = str(raw.iloc[7, ci]).strip() if ci < raw.shape[1] else ""
+        val8 = str(raw.iloc[8, ci]).strip() if ci < raw.shape[1] else ""
+        if "LT FC IDR" in val7 or "LT FC IDR" in val8:
+            rating_col = ci
+            break
+    if rating_col is None:
+        # Fallback: try col 8
+        rating_col = 8 if raw.shape[1] > 8 else None
+
+    # Extract data starting from row 10
+    data_start_row = 10
+    data_rows = raw.iloc[data_start_row:].copy()
+    
+    # Filter to COUNTRY rows only (skip HEADING rows)
+    if data_rows.shape[1] > type_col:
+        mask = data_rows.iloc[:, type_col].astype(str).str.strip().str.upper() == "COUNTRY"
+        data_rows = data_rows[mask].copy()
+    
+    if data_rows.empty:
+        return empty
+
+    # Build records
+    records = []
+    data_col_indices = col_map_df["col_idx"].tolist()
+    
+    for _, row in data_rows.iterrows():
+        country_name = str(row.iloc[name_col]).strip() if pd.notna(row.iloc[name_col]) else ""
+        iso_code = str(row.iloc[iso_col]).strip() if pd.notna(row.iloc[iso_col]) else ""
+        lt_fc = str(row.iloc[rating_col]).strip() if rating_col is not None and pd.notna(row.iloc[rating_col]) else ""
+        
+        if not country_name or country_name == "nan":
+            continue
+            
+        for _, cm in col_map_df.iterrows():
+            ci = cm["col_idx"]
+            val = row.iloc[ci] if ci < len(row) else None
+            records.append({
+                "section": cm["section"],
+                "indicator": cm["indicator"],
+                "indicator_detail": cm["indicator_detail"],
+                "country_name": country_name,
+                "country_code": iso_code,
+                "lt_fc_rating": lt_fc,
+                "year": cm["year"],
+                "value_raw": val,
+            })
+
+    if not records:
+        return empty
+
+    df = pd.DataFrame(records)
+    df["value"] = coerce_numeric(df["value_raw"])
+    df["year_num"] = pd.to_numeric(
+        df["year"].astype(str).str.extract(r"(\d{4})")[0], errors="coerce"
+    )
+    df["is_forecast"] = df["year"].astype(str).str.contains(r"[ef]$", case=False, na=False)
+    
+    return df[[
+        "section", "indicator", "indicator_detail", "country_name",
+        "country_code", "lt_fc_rating", "year", "year_num",
+        "is_forecast", "value"
+    ]].dropna(subset=["indicator", "year"])
+
+
+# ============================================================
+# Comparator → Excel export
+# ============================================================
+
+def _sane_sheet(name, used, ml=28):
+    safe = re.sub(r'[/\\?*\[\]:]+', '_', str(name)).strip()[:ml] or 'Sheet'
+    base, n = safe, 2
+    while safe in used:
+        safe = base[:ml-2] + '_' + str(n); n += 1
+    return safe
+
+
+def comparator_to_excel(df: pd.DataFrame) -> bytes:
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    ws_data = wb.create_sheet('Dados')
+    hdr_fill = PatternFill('solid', fgColor='1F4E79')
+    hdr_font = Font(bold=True, color='FFFFFF')
+    thin = Side(style='thin', color='BFBFBF')
+    brd = Border(left=thin, right=thin, top=thin, bottom=thin)
+    alt = PatternFill('solid', fgColor='D6E4F0')
+
+    cols_export = [c for c in
+        ['section', 'country_name', 'country_code', 'lt_fc_rating',
+         'indicator', 'year', 'year_num', 'value', 'is_forecast']
+        if c in df.columns]
+    for ci, col in enumerate(cols_export, 1):
+        c = ws_data.cell(1, ci, col)
+        c.font = hdr_font; c.fill = hdr_fill
+        c.alignment = Alignment(horizontal='center', wrap_text=True)
+        c.border = brd
+    for ri, row in enumerate(df[cols_export].itertuples(index=False), 2):
+        fill = alt if ri % 2 == 0 else PatternFill()
+        for ci, val in enumerate(row, 1):
+            import math as _math
+            v = val if not (isinstance(val, float) and _math.isnan(val)) else None
+            c = ws_data.cell(ri, ci, v)
+            c.fill = fill; c.border = brd
+            c.alignment = Alignment(horizontal='center')
+    ws_data.freeze_panes = 'A2'
+
+    # Charts
+    ws_charts = wb.create_sheet('Graficos')
+    used = list(wb.sheetnames)
+    chart_row = 1
+    indicators = sorted(df['indicator'].dropna().unique()) if 'indicator' in df.columns else []
+    for ind in indicators:
+        df_i = (df[df['indicator'] == ind]
+                .dropna(subset=['year_num', 'value'])
+                .sort_values(['country_name', 'year_num']))
+        if df_i.empty:
+            continue
+        countries = sorted(df_i['country_name'].unique().tolist())
+        years = sorted(df_i['year_num'].unique().tolist())
+        n_yr = len(years); n_ct = len(countries)
+        if n_ct > 30 or n_yr == 0:
+            continue
+
+        aux_name = _sane_sheet(ind, used); used.append(aux_name)
+        ws = wb.create_sheet(aux_name)
+        ws.cell(1, 1, 'Ano')
+        for ci, ct in enumerate(countries, 2):
+            ws.cell(1, ci, ct)
+        for ri, yr in enumerate(years, 2):
+            ws.cell(ri, 1, str(int(yr)))
+            for ci, ct in enumerate(countries, 2):
+                m = df_i[(df_i['country_name'] == ct) & (df_i['year_num'] == yr)]['value']
+                ws.cell(ri, ci, round(float(m.mean()), 4) if not m.empty else None)
+
+        lc = LineChart()
+        lc.title = str(ind)[:45]
+        lc.style = 10; lc.width = 22; lc.height = 14; lc.smooth = False
+
+        for ci in range(2, n_ct + 2):
+            lc.add_data(Reference(ws, min_col=ci, min_row=1, max_row=n_yr + 1),
+                        titles_from_data=True)
+        lc.set_categories(Reference(ws, min_col=1, min_row=2, max_row=n_yr + 1))
+        for s in lc.series:
+            s.marker.symbol = 'circle'
+            s.marker.size = 8
+        lc.x_axis.title = 'Ano'
+        lc.y_axis.title = 'Valor'
+        ws_charts.add_chart(lc, 'A' + str(chart_row))
+        chart_row += 25
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+# ============================================================
+# Comparator UI
+# ============================================================
+
+def build_comparator_filters(df: pd.DataFrame) -> pd.DataFrame:
+    st.subheader("Filtros do Comparator")
+
+    all_sections = sorted(df["section"].dropna().unique().tolist())
+    sel_sections = st.multiselect("Seção", options=all_sections, default=all_sections, key="fc_sections")
+    df1 = df[df["section"].isin(sel_sections)] if sel_sections else df.copy()
+
+    all_ratings = sorted(df1["lt_fc_rating"].dropna().unique().tolist())
+    sel_ratings = st.multiselect("LT FC IDR", options=all_ratings, default=[], key="fc_ratings",
+                                  help="Deixe vazio para todos.")
+    df2 = df1[df1["lt_fc_rating"].isin(sel_ratings)] if sel_ratings else df1.copy()
+
+    all_countries = sorted(df2["country_name"].dropna().unique().tolist())
+    sel_countries = st.multiselect("País", options=all_countries, default=[], key="fc_countries",
+                                    help="Deixe vazio para todos.")
+
+    all_ind = sorted(df2["indicator"].dropna().unique().tolist())
+    sel_ind = st.multiselect("Indicadores", options=all_ind, default=[], key="fc_indicators",
+                              help="Deixe vazio para todos.")
+
+    valid_years = df2["year_num"].dropna()
+    yr_min = int(valid_years.min()) if not valid_years.empty else 2019
+    yr_max = int(valid_years.max()) if not valid_years.empty else 2028
+    sel_yrs = st.slider("Faixa de anos", min_value=yr_min, max_value=yr_max,
+                         value=(yr_min, yr_max), key="fc_years")
+
+    filtered = df2.copy()
+    if sel_countries:
+        filtered = filtered[filtered["country_name"].isin(sel_countries)]
+    if sel_ind:
+        filtered = filtered[filtered["indicator"].isin(sel_ind)]
+    filtered = filtered[filtered["year_num"].between(sel_yrs[0], sel_yrs[1], inclusive="both")]
+    return filtered
+
+
+def render_comparator_dashboard(df: pd.DataFrame):
+    st.subheader("Dashboards – Fitch Comparator")
+    if df.empty:
+        st.warning("Nenhum dado encontrado com os filtros selecionados.")
+        return
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Países", df["country_name"].nunique())
+    c2.metric("Indicadores", df["indicator"].nunique())
+    c3.metric("Observações", f"{len(df):,}".replace(",", "."))
+
+    sections = sorted(df["section"].dropna().unique().tolist())
+    if not sections:
+        st.info("Nenhuma seção disponível.")
+        return
+
+    sel_section = st.selectbox("Seção para gráficos", sections, index=0, key="fc_chart_section")
+    plot_df = df[df["section"] == sel_section].dropna(subset=["year_num", "value"])
+    if plot_df.empty:
+        st.info("Sem dados numéricos para esta seção.")
+        return
+
+    indicators = sorted(plot_df["indicator"].dropna().unique().tolist())
+    st.markdown(f"### {sel_section} — **{len(indicators)}** indicadores")
+    show_legend = plot_df["country_name"].nunique() <= 12
+
+    for i in range(0, len(indicators), 2):
+        row_inds = indicators[i:i+2]
+        row_cols = st.columns(2)
+        for col, ind in zip(row_cols, row_inds):
+            with col:
+                ind_df = plot_df[plot_df["indicator"] == ind].sort_values(["country_name", "year_num"])
+                if ind_df.empty:
+                    st.caption(f"Sem dados: {ind}")
+                    continue
+                fig = px.line(ind_df, x="year_num", y="value", color="country_name",
+                              markers=True, hover_data=["lt_fc_rating", "year", "country_code"],
+                              title=ind)
+                fig.update_layout(height=340, margin=dict(l=10, r=10, t=50, b=10),
+                                  legend_title_text="País", showlegend=show_legend)
+                fig.update_xaxes(title="Ano")
+                fig.update_yaxes(title="Valor")
+                try:
+                    st.plotly_chart(fig, use_container_width=True)
+                except TypeError:
+                    st.plotly_chart(fig)
+
+    st.markdown("---")
+    st.download_button(
+        "⬇️ Baixar Excel (.xlsx com gráficos)",
+        data=comparator_to_excel(df),
+        file_name="fitch_comparator_dashboard.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_comp_dash",
+    )
+
+
+def render_comparator_table(df: pd.DataFrame):
+    st.subheader("Dados em tabela – Fitch Comparator")
+    if df.empty:
+        st.warning("Nenhum dado encontrado.")
+        return
+    view = st.radio("Visualização", ["Longa (recomendada)", "Pivotada"], horizontal=True,
+                     index=0, key="fc_view")
+    long_df = df.sort_values(["section", "country_name", "indicator", "year_num"]).copy()
+    if view == "Longa (recomendada)":
+        display = long_df
+    else:
+        display = df.pivot_table(
+            index=["section", "country_name", "country_code", "lt_fc_rating", "indicator"],
+            columns="year", values="value", aggfunc="first"
+        ).reset_index()
+    try:
+        st.dataframe(display, use_container_width=True, hide_index=True)
+    except TypeError:
+        st.dataframe(display)
+    csv = display.to_csv(index=False).encode("utf-8-sig")
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        st.download_button("⬇️ CSV", data=csv, file_name="fitch_comparator.csv",
+                            mime="text/csv", key="dl_comp_csv")
+    with _c2:
+        st.download_button("⬇️ Excel (.xlsx)", data=comparator_to_excel(long_df),
+                            file_name="fitch_comparator.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="dl_comp_xlsx")
+
+
+# ============================================================
+# Main
 # ============================================================
 
 def main():
@@ -1048,88 +1153,58 @@ def main():
 
     st.sidebar.title("Fitch Sovereign App")
 
-    # ---- Comparator data source ----
-    with st.sidebar.expander("Comparator – arquivo de dados", expanded=False):
-        uploaded = st.file_uploader(
-            "Envie um .xlsx ou .xlsb para substituir a base local",
-            type=["xlsx", "xlsb"],
-            key="comp_upload",
-        )
-        local_file = _find_local_xlsx()
-        if uploaded is None and local_file is not None:
-            try:
-                rel = local_file.relative_to(APP_DIR)
-            except Exception:
-                rel = local_file
-            st.success(f"Usando: {rel}")
-        elif uploaded is None:
-            st.info("Nenhum arquivo local encontrado.")
-
-    uploaded_bytes = uploaded.getvalue() if uploaded is not None else None
-    comp_df = load_comparator_workbook(uploaded_bytes, file_name=uploaded.name if uploaded else "")
-    # ── DEBUG: ver estrutura do arquivo ──────────────────────────────
-    if uploaded is not None and comp_df.empty:
-        st.warning("⚠️ Arquivo carregado mas nenhum dado foi parseado. Mostrando estrutura bruta:")
-        _engine = "pyxlsb" if uploaded.name.lower().endswith(".xlsb") else "openpyxl"
-        _src = io.BytesIO(uploaded.getvalue())
-        _xls = pd.ExcelFile(_src, engine=_engine)
-        st.write(f"**Abas encontradas:** {_xls.sheet_names}")
-        for _sn in _xls.sheet_names[:3]:
-            _raw = pd.read_excel(_xls, sheet_name=_sn, header=None, engine=_engine)
-            with st.expander(f"🔍 {_sn}  —  shape {_raw.shape}"):
-                for _r in range(min(10, len(_raw))):
-                    st.text(f"Row {_r}: {_raw.iloc[_r, :8].tolist()}")
-    # ── FIM DEBUG ────────────────────────────────────────────────────
+    # --- Comparator file ---
+    st.sidebar.markdown("### Comparator data")
+    uploaded = st.sidebar.file_uploader("Upload .xlsx/.xlsb", type=["xlsx", "xlsb"], key="comp_upload")
+    comp_bytes = uploaded.getvalue() if uploaded is not None else None
+    comp_df = parse_fitch_comparator(comp_bytes)
     comp_filtered = None
+
     if not comp_df.empty:
-        with st.sidebar.expander("Comparator – filtros", expanded=False):
+        st.sidebar.success(f"{comp_df['country_name'].nunique()} países, "
+                           f"{comp_df['indicator'].nunique()} indicadores carregados")
+
+    # --- Navigation ---
+    pages = [
+        "Overview",
+        PILLAR_LABELS["structural"],
+        PILLAR_LABELS["macro"],
+        PILLAR_LABELS["public_finances"],
+        PILLAR_LABELS["external"],
+        "Qualitative Overlay (QO)",
+        "Results",
+    ]
+    if not comp_df.empty:
+        pages += ["Comparator – Dashboards", "Comparator – Dados"]
+
+    page = st.sidebar.radio("Navigate", pages)
+
+    # SRM pages
+    if page == "Overview":
+        page_overview()
+    elif page == PILLAR_LABELS["structural"]:
+        page_srm_inputs("structural")
+    elif page == PILLAR_LABELS["macro"]:
+        page_srm_inputs("macro")
+    elif page == PILLAR_LABELS["public_finances"]:
+        page_srm_inputs("public_finances")
+    elif page == PILLAR_LABELS["external"]:
+        page_srm_inputs("external")
+    elif page == "Qualitative Overlay (QO)":
+        page_qo()
+    elif page == "Results":
+        page_results()
+
+    # Comparator pages
+    elif page == "Comparator – Dashboards":
+        with st.expander("Filtros do Comparator", expanded=True):
             comp_filtered = build_comparator_filters(comp_df)
+        render_comparator_dashboard(comp_filtered if comp_filtered is not None else comp_df)
 
-    # ---- Navigation ----
-    page = st.sidebar.radio(
-        "Navegar – Metodologia",
-        [
-            "Overview",
-            PILLAR_LABELS["structural"],
-            PILLAR_LABELS["macro"],
-            PILLAR_LABELS["public_finances"],
-            PILLAR_LABELS["external"],
-            "Qualitative Overlay (QO)",
-            "Results",
-        ],
-    )
-
-    tab_method, tab_dash, tab_table = st.tabs(
-        ["Metodologia Fitch", "Comparator – Dashboards", "Comparator – Dados"]
-    )
-
-    with tab_method:
-        if page == "Overview":
-            page_overview()
-        elif page == PILLAR_LABELS["structural"]:
-            page_srm_inputs("structural")
-        elif page == PILLAR_LABELS["macro"]:
-            page_srm_inputs("macro")
-        elif page == PILLAR_LABELS["public_finances"]:
-            page_srm_inputs("public_finances")
-        elif page == PILLAR_LABELS["external"]:
-            page_srm_inputs("external")
-        elif page == "Qualitative Overlay (QO)":
-            page_qo()
-        elif page == "Results":
-            page_results()
-
-    with tab_dash:
-        if comp_df.empty or comp_filtered is None:
-            st.info("Carregue um arquivo .xlsx ou .xlsb do Comparator para ver dashboards.")
-        else:
-            render_comparator_dashboard(comp_filtered)
-
-    with tab_table:
-        if comp_df.empty or comp_filtered is None:
-            st.info("Carregue um arquivo .xlsx ou .xlsb do Comparator para ver dados.")
-        else:
-            render_comparator_table(comp_filtered)
+    elif page == "Comparator – Dados":
+        with st.expander("Filtros do Comparator", expanded=True):
+            comp_filtered = build_comparator_filters(comp_df)
+        render_comparator_table(comp_filtered if comp_filtered is not None else comp_df)
 
 
 if __name__ == "__main__":
