@@ -1067,6 +1067,19 @@ def main():
 
     uploaded_bytes = uploaded.getvalue() if uploaded is not None else None
     comp_df = load_comparator_workbook(uploaded_bytes, file_name=uploaded.name if uploaded else "")
+    # ── DEBUG: ver estrutura do arquivo ──────────────────────────────
+    if uploaded is not None and comp_df.empty:
+        st.warning("⚠️ Arquivo carregado mas nenhum dado foi parseado. Mostrando estrutura bruta:")
+        _engine = "pyxlsb" if uploaded.name.lower().endswith(".xlsb") else "openpyxl"
+        _src = io.BytesIO(uploaded.getvalue())
+        _xls = pd.ExcelFile(_src, engine=_engine)
+        st.write(f"**Abas encontradas:** {_xls.sheet_names}")
+        for _sn in _xls.sheet_names[:3]:
+            _raw = pd.read_excel(_xls, sheet_name=_sn, header=None, engine=_engine)
+            with st.expander(f"🔍 {_sn}  —  shape {_raw.shape}"):
+                for _r in range(min(10, len(_raw))):
+                    st.text(f"Row {_r}: {_raw.iloc[_r, :8].tolist()}")
+    # ── FIM DEBUG ────────────────────────────────────────────────────
     comp_filtered = None
     if not comp_df.empty:
         with st.sidebar.expander("Comparator – filtros", expanded=False):
