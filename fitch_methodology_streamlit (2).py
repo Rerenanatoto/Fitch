@@ -1,4 +1,7 @@
-# fitch_comparator_app.py
+# ============================================================
+# Fitch Sovereign Comparator – Streamlit App
+# ============================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,88 +14,65 @@ st.set_page_config(
     layout="wide"
 )
 
-# =========================================================
-# Utils
-# =========================================================
+# ============================================================
+# 1. Leitura do XLSB
+# ============================================================
 
-def read_xlsb_to_df(file):
-    """
-    Lê a PRIMEIRA aba do XLSB e retorna DataFrame cru
-    """
-    data = []
+def read_xlsb(file):
+    rows = []
     with open_workbook(file) as wb:
         sheet = wb.get_sheet(1)
         for row in sheet.rows():
-            data.append([cell.v for cell in row])
-    return pd.DataFrame(data)
+            rows.append([cell.v for cell in row])
+    return pd.DataFrame(rows)
 
 
 def find_data_start(df):
     """
-    Encontra a linha onde começam os dados (países / medianas)
+    Encontra onde começam países/medianas
     """
     for i in range(len(df)):
-        val = str(df.iloc[i, 0]).lower()
-        if re.match(r"[a-z]{3,}sov", val) or "eur" in val:
+        v = str(df.iloc[i, 0]).lower()
+        if re.match(r"[a-z]{3,}sov", v) or "eur" in v:
             return i
-    return None
+    raise ValueError("Não foi possível localizar início dos dados")
 
 
 def normalize_long(df_raw):
-    """
-    Converte a planilha gigante em formato LONGO
-    """
     start = find_data_start(df_raw)
-    if start is None:
-        raise ValueError("Não foi possível localizar o início dos dados")
 
-    header_1 = df_raw.iloc[start - 3].fillna("")
-    header_2 = df_raw.iloc[start - 2].fillna("")
-    header_3 = df_raw.iloc[start - 1].fillna("")
+    h1 = df_raw.iloc[start - 3].fillna("")
+    h2 = df_raw.iloc[start - 2].fillna("")
+    h3 = df_raw.iloc[start - 1].fillna("")
 
     df = df_raw.iloc[start:].reset_index(drop=True)
 
     df.columns = [
-        f"{header_1[i]} | {header_2[i]} | {header_3[i]}".strip()
+        f"{h1[i]} | {h2[i]} | {h3[i]}".strip()
         for i in range(len(df.columns))
     ]
 
-    # Metadados básicos (sempre nas primeiras colunas)
     meta_cols = df.columns[:10]
-
     value_cols = df.columns[10:]
 
-    long_df = df.melt(
+    long = df.melt(
         id_vars=meta_cols,
         value_vars=value_cols,
         var_name="raw_indicator",
         value_name="value"
     )
 
-    # Extrai ano
-    long_df["year"] = (
-        long_df["raw_indicator"]
-        .str.extract(r"(19\d{2}|20\d{2})")[0]
-    )
+    long["year"] = long["raw_indicator"].str.extract(r"(19\d{2}|20\d{2})")
+    long["indicator"] = long["raw_indicator"].str.replace(r"\|.*", "", regex=True).str.strip()
+    long["entity"] = df.iloc[:, 0].values.repeat(len(value_cols))
 
-    # Limpa nome do indicador
-    long_df["indicator"] = (
-        long_df["raw_indicator"]
-        .str.replace(r"\|.*", "", regex=True)
-        .str.strip()
-    )
+    long["value"] = pd.to_numeric(long["value"], errors="coerce")
 
-    # País / grupo
-    long_df["entity"] = df.iloc[:, 0].values.repeat(len(value_cols))
+    return long.dropna(subset=["year"])
 
-    long_df["value"] = pd.to_numeric(long_df["value"], errors="coerce")
-
-    return long_df.dropna(subset=["year"])
-
-
-# =========================================================
-# UI
-# =========================================================
+# ============================================================
+# 2. UI – Upload
+# ============================================================
 
 st.title("Fitch Global Sovereign Data Comparator")
 
@@ -105,59 +85,62 @@ if not uploaded:
     st.info("Envie o arquivo para iniciar")
     st.stop()
 
-with st.spinner("Lendo arquivo XLSB..."):
-    raw_df = read_xlsb_to_df(uploaded)
-
-with st.spinner("Normalizando dados..."):
+with st.spinner("Lendo e processando XLSB..."):
+    raw_df = read_xlsb(uploaded)
     df_long = normalize_long(raw_df)
+
+# ============================================================
+# 3. Abas do App
+# ============================================================
 
 tab_met, tab_dash, tab_data = st.tabs(
     ["📘 Metodologia", "📊 Dashboard", "📋 Dados"]
 )
 
-# =========================================================
-# Metodologia
-# =========================================================
+# ============================================================
+# Aba 1 – Metodologia
+# ============================================================
+
 with tab_met:
     st.markdown("""
 ### Fitch Global Sovereign Data Comparator
 
-Este dashboard utiliza a base pública do **Fitch Sovereign Comparator**,
-organizada em milhares de indicadores macroeconômicos, fiscais, externos
-e institucionais.
+Este aplicativo lê diretamente a **base pública do Fitch Sovereign Comparator**
+no formato XLSB.
 
 **Tratamento aplicado:**
-- Leitura direta do XLSB original
-- Ignora cabeçalhos multinível
-- Converte dados para formato longo
+- Leitura direta do XLSB (sem Excel intermediário)
+- Cabeçalhos multinível ignorados
+- Conversão para formato longo
 - Nenhuma interpolação ou ajuste estatístico
 
-**Observação importante:**
-Este material é **exclusivamente analítico** e não substitui
-avaliações oficiais da Fitch Ratings.
+**Uso:**
+- Ferramenta analítica
+- Não substitui avaliações oficiais da Fitch Ratings
 """)
 
-# =========================================================
-# Dashboard
-# =========================================================
+# ============================================================
+# Aba 2 – Dashboard
+# ============================================================
+
 with tab_dash:
     st.subheader("Dashboard interativo")
 
-    col1, col2, col3 = st.columns(3)
+    c1, c2, c3 = st.columns(3)
 
-    with col1:
+    with c1:
         entity = st.selectbox(
             "País / Grupo",
             sorted(df_long["entity"].unique())
         )
 
-    with col2:
+    with c2:
         indicator = st.selectbox(
             "Indicador",
             sorted(df_long["indicator"].unique())
         )
 
-    with col3:
+    with c3:
         years = st.multiselect(
             "Anos",
             sorted(df_long["year"].unique()),
@@ -180,9 +163,10 @@ with tab_dash:
 
     st.plotly_chart(fig, use_container_width=True)
 
-# =========================================================
-# Dados
-# =========================================================
+# ============================================================
+# Aba 3 – Dados
+# ============================================================
+
 with tab_data:
     st.subheader("Tabela de dados")
 
@@ -205,6 +189,7 @@ with tab_data:
     st.dataframe(display, use_container_width=True)
 
     csv = display.to_csv(index=False).encode("utf-8-sig")
+
     st.download_button(
         "⬇️ Download CSV",
         csv,
