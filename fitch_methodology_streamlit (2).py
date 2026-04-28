@@ -522,38 +522,71 @@ def _parse_sheet(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
 
 
 def _find_local_xlsx() -> "Path | None":
+    """Search for .xlsx or .xlsb files in DATA_DIR / APP_DIR."""
     preferred = [
         DATA_DIR / "base.xlsx", DATA_DIR / "report.xlsx",
+        DATA_DIR / "base.xlsb", DATA_DIR / "report.xlsb",
         APP_DIR / "base.xlsx", APP_DIR / "report.xlsx",
+        APP_DIR / "base.xlsb", APP_DIR / "report.xlsb",
     ]
     for candidate in preferred:
         if candidate.exists():
             return candidate
     for search_dir in [DATA_DIR, APP_DIR]:
         if search_dir.exists():
-            files = sorted([p for p in search_dir.glob("*.xlsx") if not p.name.startswith("~$")])
+            files = sorted([
+                p for p in search_dir.iterdir()
+                if p.suffix.lower() in (".xlsx", ".xlsb")
+                and not p.name.startswith("~$")
+            ])
             if files:
                 return files[0]
     return None
 
 
+def _detect_engine(source) -> str:
+    """Return 'pyxlsb' for .xlsb files, 'openpyxl' otherwise."""
+    if isinstance(source, (str, Path)):
+        return "pyxlsb" if str(source).lower().endswith(".xlsb") else "openpyxl"
+    return "openpyxl"          # BytesIO → assume xlsx by default
+
+
+def _detect_engine_from_bytes(header: bytes) -> str:
+    """Peek at magic bytes inside the ZIP/CFB to decide engine.
+
+    .xlsb is an OLE/CFB compound file (magic: \xd0\xcf\x11\xe0)
+    .xlsx is a ZIP   (magic: PK / \x50\x4b)
+    """
+    if header[:4] == b"\xd0\xcf\x11\xe0":
+        return "pyxlsb"
+    return "openpyxl"
+
+
 @st.cache_data(show_spinner=False)
-def load_comparator_workbook(file_bytes=None) -> pd.DataFrame:
+def load_comparator_workbook(file_bytes=None, file_name: str = "") -> pd.DataFrame:
+    """Load a .xlsx or .xlsb workbook into a long-format DataFrame."""
     empty = pd.DataFrame(columns=[
         "sheet", "sheet_key", "country_name", "country_code", "lt_fc_rating",
         "indicator", "indicator_key", "year", "year_num", "is_forecast", "value"
     ])
+
     if file_bytes is not None:
         source = io.BytesIO(file_bytes)
+        if file_name.lower().endswith(".xlsb"):
+            engine = "pyxlsb"
+        else:
+            engine = _detect_engine_from_bytes(file_bytes[:8])
     else:
         local_file = _find_local_xlsx()
         if local_file is None:
             return empty
         source = local_file
-    xls = pd.ExcelFile(source, engine="openpyxl")
+        engine = _detect_engine(source)
+
+    xls = pd.ExcelFile(source, engine=engine)
     frames = []
     for sheet in xls.sheet_names:
-        raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine="openpyxl")
+        raw = pd.read_excel(xls, sheet_name=sheet, header=None, engine=engine)
         try:
             parsed = _parse_sheet(raw, sheet)
             if not parsed.empty:
@@ -1018,7 +1051,8 @@ def main():
     # ---- Comparator data source ----
     with st.sidebar.expander("Comparator – arquivo de dados", expanded=False):
         uploaded = st.file_uploader(
-            "Envie um .xlsx para substituir a base local", type=["xlsx"],
+            "Envie um .xlsx ou .xlsb para substituir a base local",
+            type=["xlsx", "xlsb"],
             key="comp_upload",
         )
         local_file = _find_local_xlsx()
@@ -1032,7 +1066,7 @@ def main():
             st.info("Nenhum arquivo local encontrado.")
 
     uploaded_bytes = uploaded.getvalue() if uploaded is not None else None
-    comp_df = load_comparator_workbook(uploaded_bytes)
+    comp_df = load_comparator_workbook(uploaded_bytes, file_name=uploaded.name if uploaded else "")
     comp_filtered = None
     if not comp_df.empty:
         with st.sidebar.expander("Comparator – filtros", expanded=False):
@@ -1074,13 +1108,13 @@ def main():
 
     with tab_dash:
         if comp_df.empty or comp_filtered is None:
-            st.info("Carregue um arquivo .xlsx do Comparator para ver dashboards.")
+            st.info("Carregue um arquivo .xlsx ou .xlsb do Comparator para ver dashboards.")
         else:
             render_comparator_dashboard(comp_filtered)
 
     with tab_table:
         if comp_df.empty or comp_filtered is None:
-            st.info("Carregue um arquivo .xlsx do Comparator para ver dados.")
+            st.info("Carregue um arquivo .xlsx ou .xlsb do Comparator para ver dados.")
         else:
             render_comparator_table(comp_filtered)
 
