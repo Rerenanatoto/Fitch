@@ -1,11 +1,12 @@
 # ============================================================
 # Fitch Sovereign Methodology + Global Sovereign Data Comparator
-# Streamlit App – v3 (completo)
+# Streamlit App – v4 (Dashboard e Tabela inspirados no S&P)
 # ============================================================
 
 import io
 import math
 import re
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from openpyxl import Workbook
 from openpyxl.chart import LineChart, Reference
+from openpyxl.chart.series import DataPoint
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 st.set_page_config(page_title="Fitch Sovereign Methodology + Comparator", layout="wide")
@@ -22,123 +24,105 @@ st.set_page_config(page_title="Fitch Sovereign Methodology + Comparator", layout
 INTERCEPT = 4.877
 
 # ============================================================
-# Metadata – SRM
+# Metadata – SRM  (inalterado do v3)
 # ============================================================
 
 SRM_VARIABLES = {
     "structural": {
         "governance_indicator": {
             "label": "Composite governance indicator (percentile rank)",
-            "coefficient": 0.079,
-            "weight": 22.1,
+            "coefficient": 0.079, "weight": 22.1,
             "help": "Simple average percentile rank of World Bank governance indicators.",
         },
         "gdp_per_capita_percentile": {
             "label": "GDP per capita percentile rank (USD, market FX)",
-            "coefficient": 0.037,
-            "weight": 11.7,
+            "coefficient": 0.037, "weight": 11.7,
             "help": "Percentile rank across Fitch-rated sovereigns.",
         },
         "share_world_gdp_log": {
             "label": "Share in world GDP (natural log of % share)",
-            "coefficient": 0.645,
-            "weight": 14.5,
+            "coefficient": 0.645, "weight": 14.5,
             "help": "Natural logarithm of the percentage share in world GDP.",
         },
         "years_since_default_transform": {
             "label": "Years since default/restructuring event (SRM transformed value)",
-            "coefficient": -1.744,
-            "weight": 4.3,
+            "coefficient": -1.744, "weight": 4.3,
             "help": "Use 0 if no event after 1980, or input the SRM-ready transformed value.",
         },
         "money_supply_log": {
             "label": "Broad money supply (% of GDP) - natural log",
-            "coefficient": 0.148,
-            "weight": 1.1,
+            "coefficient": 0.148, "weight": 1.1,
             "help": "Natural logarithm of broad money as % of GDP.",
         },
     },
     "macro": {
         "real_gdp_growth_volatility_log": {
             "label": "Real GDP growth volatility - natural log",
-            "coefficient": -0.704,
-            "weight": 4.5,
+            "coefficient": -0.704, "weight": 4.5,
             "help": "Natural log of the exponentially weighted std. deviation of historical real GDP growth.",
         },
         "consumer_price_inflation": {
             "label": "Consumer price inflation (3-year centred average, %, truncated 2%-50%)",
-            "coefficient": -0.068,
-            "weight": 3.6,
+            "coefficient": -0.068, "weight": 3.6,
             "help": "Public criteria truncate this variable to the 2%-50% range.",
         },
         "real_gdp_growth": {
             "label": "Real GDP growth (3-year centred average, %)",
-            "coefficient": 0.054,
-            "weight": 1.7,
+            "coefficient": 0.054, "weight": 1.7,
             "help": "Three-year centred average.",
         },
     },
     "public_finances": {
         "gross_general_govt_debt": {
             "label": "Gross general government debt (% of GDP, 3-year centred average)",
-            "coefficient": -0.023,
-            "weight": 9.2,
+            "coefficient": -0.023, "weight": 9.2,
             "help": "Gross general government debt, centred three-year average.",
         },
         "general_govt_interest_revenue": {
             "label": "General government interest (% of revenues, 3-year centred average)",
-            "coefficient": -0.044,
-            "weight": 4.6,
+            "coefficient": -0.044, "weight": 4.6,
             "help": "General government interest expenditures as % of revenues.",
         },
         "general_govt_fiscal_balance": {
             "label": "General government fiscal balance (% of GDP, 3-year centred average)",
-            "coefficient": 0.039,
-            "weight": 2.1,
+            "coefficient": 0.039, "weight": 2.1,
             "help": "General government fiscal balance, centred three-year average.",
         },
         "fc_govt_debt_share": {
-            "label": "Foreign-currency government debt (% of gross government debt, 3-year centred average)",
-            "coefficient": -0.008,
-            "weight": 3.2,
+            "label": "Foreign-currency government debt (% of gross government debt, 3-yr centred avg)",
+            "coefficient": -0.008, "weight": 3.2,
             "help": "Foreign-currency or indexed government debt as % of gross government debt.",
         },
     },
     "external": {
         "reserve_currency_flexibility": {
             "label": "Reserve-currency flexibility (SRM transformed value)",
-            "coefficient": 0.484,
-            "weight": 7.1,
+            "coefficient": 0.484, "weight": 7.1,
             "help": "Use 0 if the sovereign has no reserve-currency flexibility.",
         },
         "sovereign_net_foreign_assets": {
             "label": "Sovereign net foreign assets (% of GDP, 3-year centred average)",
-            "coefficient": 0.010,
-            "weight": 7.5,
+            "coefficient": 0.010, "weight": 7.5,
             "help": "Three-year centred average of sovereign net foreign assets.",
         },
         "commodity_dependence": {
             "label": "Commodity dependence (% of current external receipts)",
-            "coefficient": -0.003,
-            "weight": 1.0,
+            "coefficient": -0.003, "weight": 1.0,
             "help": "Non-manufactured merchandise exports as % of current external receipts.",
         },
         "fx_reserves_months_cxp": {
             "label": "Official FX reserves (months of CXP) - for non-reserve-currency sovereigns",
-            "coefficient": 0.021,
-            "weight": 1.2,
+            "coefficient": 0.021, "weight": 1.2,
             "help": "Usually set to 0 if reserve-currency flexibility is above 0.",
         },
         "external_interest_service": {
-            "label": "External interest service (% of current external receipts, 3-year centred average)",
-            "coefficient": -0.004,
-            "weight": 0.2,
+            "label": "External interest service (% of current external receipts, 3-yr centred avg)",
+            "coefficient": -0.004, "weight": 0.2,
             "help": "Three-year centred average.",
         },
         "cab_plus_net_fdi": {
-            "label": "Current account balance + net inward FDI (% of GDP, 3-year centred average)",
-            "coefficient": 0.004,
-            "weight": 0.4,
+            "label": "Current account balance + net inward FDI (% of GDP, 3-yr centred avg)",
+            "coefficient": 0.004, "weight": 0.4,
             "help": "Three-year centred average.",
         },
     },
@@ -191,12 +175,9 @@ RATING_SCALE_NUMERIC = {
 }
 
 LONG_TERM_SCALE = [
-    "AAA", "AA+", "AA", "AA-",
-    "A+", "A", "A-",
-    "BBB+", "BBB", "BBB-",
-    "BB+", "BB", "BB-",
-    "B+", "B", "B-",
-    "CCC+", "CCC", "CCC-", "CC", "C", "RD", "D",
+    "AAA", "AA+", "AA", "AA-", "A+", "A", "A-",
+    "BBB+", "BBB", "BBB-", "BB+", "BB", "BB-",
+    "B+", "B", "B-", "CCC+", "CCC", "CCC-", "CC", "C", "RD", "D",
 ]
 
 ST_MAPPING_OPTIONS = {
@@ -232,13 +213,50 @@ VARIABLE_RULES = {
 }
 
 # ============================================================
-# SRM Helpers
+# Helpers gerais
+# ============================================================
+
+def normalize_label(text: str) -> str:
+    text = str(text).strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+def slugify(text: str) -> str:
+    text = normalize_label(text).lower()
+    text = text.replace("&", " and ")
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text
+
+def coerce_numeric(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    s = s.replace({
+        "N/A": np.nan, "N.M.": np.nan, "NM": np.nan,
+        "None": np.nan, "nan": np.nan, "": np.nan,
+        "..": np.nan, "...": np.nan, "n.a": np.nan,
+        "n.a.": np.nan, "-": np.nan,
+    })
+    return pd.to_numeric(s, errors="coerce")
+
+def st_dataframe_compat(df: pd.DataFrame, **kwargs):
+    try:
+        st.dataframe(df, **kwargs)
+    except TypeError:
+        st.dataframe(df)
+
+def st_plotly_chart_compat(fig, use_container_width: bool = True):
+    try:
+        st.plotly_chart(fig, use_container_width=use_container_width)
+    except TypeError:
+        st.plotly_chart(fig)
+
+# ============================================================
+# SRM Helpers  (inalterado do v3)
 # ============================================================
 
 def clamp_qo(adjustments: dict, crisis_extension: bool = False) -> int:
     raw = int(sum(adjustments.values()))
     return raw if crisis_extension else max(-3, min(3, raw))
-
 
 def score_to_lt_rating(score: float) -> str:
     rounded = int(round(score))
@@ -248,10 +266,8 @@ def score_to_lt_rating(score: float) -> str:
         return "CCC+"
     return RATING_SCALE_NUMERIC.get(rounded, "CCC+")
 
-
 def rating_index(rating: str) -> int:
     return LONG_TERM_SCALE.index(rating) if rating in LONG_TERM_SCALE else LONG_TERM_SCALE.index("CCC+")
-
 
 def apply_notches(base_rating: str, notch_adjustment: int) -> str:
     if base_rating not in LONG_TERM_SCALE:
@@ -260,11 +276,9 @@ def apply_notches(base_rating: str, notch_adjustment: int) -> str:
     new_idx = max(0, min(len(LONG_TERM_SCALE) - 1, idx - int(notch_adjustment)))
     return LONG_TERM_SCALE[new_idx]
 
-
 def map_short_term(long_rating: str, use_higher_option: bool) -> str:
     lo, hi = ST_MAPPING_OPTIONS.get(long_rating, ("C", "C"))
     return hi if use_higher_option else lo
-
 
 def approx_years_since_default_transform(years_since_event=None, no_event_since_1980=True) -> float:
     if no_event_since_1980 or years_since_event is None:
@@ -272,17 +286,12 @@ def approx_years_since_default_transform(years_since_event=None, no_event_since_
     years_since_event = max(0.0, float(years_since_event))
     return float(math.exp(-math.log(2) * years_since_event / 4.3))
 
-
 def safe_number_input(var_key: str, label: str, default: float, help_text: str):
     rule = VARIABLE_RULES.get(var_key, {"step": 0.1})
     return st.number_input(
-        label,
-        value=float(default),
-        step=float(rule.get("step", 0.1)),
-        key=var_key,
-        help=help_text,
+        label, value=float(default), step=float(rule.get("step", 0.1)),
+        key=var_key, help=help_text,
     )
-
 
 def get_clean_srm_inputs() -> dict:
     inputs = {}
@@ -293,7 +302,6 @@ def get_clean_srm_inputs() -> dict:
                 v = min(50.0, max(2.0, v))
             inputs[k] = v
     return inputs
-
 
 def compute_srm(inputs: dict) -> tuple:
     details = []
@@ -311,14 +319,10 @@ def compute_srm(inputs: dict) -> tuple:
                 "Contribution": contribution,
             })
     details.append({
-        "Pillar": "Intercept",
-        "Variable": "OLS intercept",
-        "Value": 1.0,
-        "Coefficient": INTERCEPT,
-        "Contribution": INTERCEPT,
+        "Pillar": "Intercept", "Variable": "OLS intercept",
+        "Value": 1.0, "Coefficient": INTERCEPT, "Contribution": INTERCEPT,
     })
     return total, details
-
 
 def build_radar(srm_score: float, qo_total: int, final_score: float):
     categories = ["SRM score", "QO total", "Final model score"]
@@ -329,9 +333,8 @@ def build_radar(srm_score: float, qo_total: int, final_score: float):
     fig.update_layout(showlegend=False, polar=dict(radialaxis=dict(visible=True)))
     return fig
 
-
 # ============================================================
-# State init
+# State init  (inalterado do v3)
 # ============================================================
 
 def init_state():
@@ -365,83 +368,43 @@ def init_state():
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
 
-
 # ============================================================
-# Fitch XLSB Parser
+# Fitch XLSB Parser  (inalterado do v3)
 # ============================================================
-
-def normalize_label(text: str) -> str:
-    text = str(text).strip()
-    text = re.sub(r"\s+", " ", text)
-    return text
-
-
-def slugify(text: str) -> str:
-    text = normalize_label(text).lower()
-    text = text.replace("&", " and ")
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    text = re.sub(r"_+", "_", text).strip("_")
-    return text
-
-
-def coerce_numeric(series: pd.Series) -> pd.Series:
-    s = series.astype(str).str.strip()
-    s = s.replace({
-        "N/A": np.nan, "N.M.": np.nan, "NM": np.nan,
-        "None": np.nan, "nan": np.nan, "": np.nan,
-        "..": np.nan, "...": np.nan, "n.a": np.nan,
-        "n.a.": np.nan, "-": np.nan,
-    })
-    return pd.to_numeric(s, errors="coerce")
-
 
 @st.cache_data(show_spinner=False)
 def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
     """Parse the Fitch Global Sovereign Data Comparator .xlsb format."""
     from pyxlsb import open_workbook
 
-    # 1. Read ALL rows from first sheet
+    wb = open_workbook(io.BytesIO(file_bytes))
     all_rows = []
-    with open_workbook(io.BytesIO(file_bytes)) as wb:
-        sheets = wb.sheets
-        sheet_name = sheets[0] if sheets else None
-        if sheet_name is None:
-            return pd.DataFrame()
-        with wb.get_sheet(sheet_name) as sheet:
-            for row in sheet.rows():
-                all_rows.append([cell.v for cell in row])
+    sheet_name = wb.sheets[0] if wb.sheets else None
+    if sheet_name is None:
+        return pd.DataFrame()
 
-    if len(all_rows) < 10:
+    with wb.get_sheet(sheet_name) as sheet:
+        for row in sheet.rows():
+            all_rows.append([c.v for c in row])
+
+    if not all_rows:
         return pd.DataFrame()
 
     raw = pd.DataFrame(all_rows)
 
-    # 2. Find the "Category" row (period/year header)
+    # 1. Find the "period row" – the one with many year-like values (2020, 2021, …)
     cat_row_idx = None
-    for i in range(min(20, len(raw))):
-        row_vals = [str(v).strip().lower() if v is not None else "" for v in raw.iloc[i]]
-        if "category" in row_vals or "sovereign" in row_vals:
+    for i in range(min(30, len(raw))):
+        row_str = " ".join([str(v) for v in raw.iloc[i].tolist() if v is not None])
+        if re.search(r"\b20(2[0-9]|3[0-9])\b", row_str) and row_str.count("20") > 5:
             cat_row_idx = i
             break
-
-    if cat_row_idx is None:
-        # Fallback: find row where we see years like 2024, 2025
-        for i in range(min(20, len(raw))):
-            row_str = " ".join([str(v) for v in raw.iloc[i] if v is not None])
-            if re.search(r"\b20(2[0-9]|3[0-9])\b", row_str) and row_str.count("20") > 5:
-                cat_row_idx = i
-                break
 
     if cat_row_idx is None:
         st.error("Não foi possível localizar a linha de períodos no XLSB.")
         return pd.DataFrame()
 
-    # 3. Extract header rows
-    # Section row = ~3 rows above cat_row (the one with "RATINGS AND METADATA", "DOMESTIC ECONOMY" etc.)
-    # Indicator row = ~2 rows above cat_row (the one with "LT FC IDR", "Real GDP growth" etc.)
-    # Unit row = ~1 row above cat_row (the one with "(USDbn)", "(% GDP)" etc.)
-    # Period row = cat_row itself ("2025", "19-23 av." etc.)
-
+    # 2. Extract header rows
     section_row_idx = max(0, cat_row_idx - 4)
     indicator_row_idx = max(0, cat_row_idx - 2)
     unit_row_idx = max(0, cat_row_idx - 1)
@@ -461,10 +424,8 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
     units_raw = get_row_vals(unit_row_idx)
     periods_raw = get_row_vals(period_row_idx)
 
-    # Forward-fill sections and indicators
     def forward_fill(lst):
-        result = []
-        current = ""
+        result, current = [], ""
         for v in lst:
             if v and v.lower() not in ("none", "nan", ""):
                 current = v
@@ -474,12 +435,10 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
     sections = forward_fill(sections_raw)
     indicators = forward_fill(indicators_raw)
 
-    # 4. Data rows start after cat_row
+    # 3. Data rows start after period row
     data_start = cat_row_idx + 1
 
-    # 5. Find first data column (after metadata columns)
-    # Metadata is typically first ~14 columns until we start seeing numeric year data
-    # We'll identify metadata vs data columns by checking the period row
+    # 4. Find first data column
     meta_end = 0
     for c in range(ncols):
         p = periods_raw[c].strip()
@@ -487,9 +446,9 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
             meta_end = c
             break
     if meta_end == 0:
-        meta_end = 14  # fallback
+        meta_end = 14
 
-    # 6. Build column metadata
+    # 5. Build column metadata
     col_meta = []
     for c in range(meta_end, ncols):
         section = normalize_label(sections[c]) if c < len(sections) else ""
@@ -502,10 +461,8 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
         if not period or period.lower() in ("none", "nan", ""):
             continue
 
-        # Parse year from period
         year_match = re.search(r"(19|20)\d{2}", period)
         year_num = int(year_match.group()) if year_match else None
-
         is_average = "av." in period.lower() or "average" in period.lower()
         is_forecast = year_num is not None and year_num >= 2025
         is_latest = "latest" in period.lower()
@@ -526,108 +483,100 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
         st.error("Não foi possível mapear colunas de dados.")
         return pd.DataFrame()
 
-    # 7. Parse data rows
+    # 6. Parse data rows
     records = []
     for r in range(data_start, len(raw)):
         row = raw.iloc[r]
-
         entity_key = str(row.iloc[0]).strip() if row.iloc[0] is not None else ""
         if not entity_key or entity_key.lower() in ("none", "nan", ""):
             continue
 
-        # Determine entity type – col 4 typically says COUNTRY or HEADING
         entity_type_raw = str(row.iloc[4]).strip().upper() if len(row) > 4 and row.iloc[4] is not None else ""
-        if "COUNTRY" in entity_type_raw:
-            entity_type = "COUNTRY"
-        elif "HEADING" in entity_type_raw:
-            entity_type = "HEADING"
-        else:
-            entity_type = "OTHER"
+        if "COUNTRY" not in entity_type_raw and "HEADING" not in entity_type_raw:
+            if not any(c.isalpha() for c in entity_key):
+                continue
 
-        # Country code (ISO) – col 5
-        country_code = str(row.iloc[5]).strip() if len(row) > 5 and row.iloc[5] is not None else ""
-        # Country name – col 6
-        country_name = str(row.iloc[6]).strip() if len(row) > 6 and row.iloc[6] is not None else ""
-        if not country_name or country_name.lower() in ("none", "nan"):
-            country_name = entity_key
+        country_name = normalize_label(str(row.iloc[1])) if len(row) > 1 and row.iloc[1] is not None else entity_key
+        country_code = normalize_label(str(row.iloc[2])) if len(row) > 2 and row.iloc[2] is not None else ""
+        lt_fc_rating = normalize_label(str(row.iloc[3])) if len(row) > 3 and row.iloc[3] is not None else ""
+        entity_type = "COUNTRY" if "COUNTRY" in entity_type_raw else "GROUP"
 
-        # Rating – col 1 or col 7 (LT FC IDR)
-        lt_fc_rating = ""
-        for rc in [7, 1]:
-            if len(row) > rc and row.iloc[rc] is not None:
-                candidate = str(row.iloc[rc]).strip()
-                if candidate and candidate.upper() in [r for r in LONG_TERM_SCALE] + ["NR", "WD"]:
-                    lt_fc_rating = candidate.upper()
-                    break
-        if not lt_fc_rating:
-            lt_fc_rating = str(row.iloc[1]).strip() if len(row) > 1 and row.iloc[1] is not None else ""
-
-        # Dev status – col 13
-        dev_status = str(row.iloc[13]).strip() if len(row) > 13 and row.iloc[13] is not None else ""
-        if dev_status.lower() in ("none", "nan"):
-            dev_status = ""
-
-        # Extract data values
         for cm in col_meta:
-            c = cm["col_idx"]
-            if c >= len(row):
-                continue
-            raw_val = row.iloc[c]
-            if raw_val is None:
-                continue
-
-            # Try numeric
-            if isinstance(raw_val, (int, float)):
-                if np.isnan(raw_val) or np.isinf(raw_val):
-                    continue
-                val = float(raw_val)
+            cidx = cm["col_idx"]
+            val_raw = row.iloc[cidx] if cidx < len(row) else None
+            val_str = str(val_raw).strip() if val_raw is not None else ""
+            if val_str.lower() in ("none", "nan", "", "n/a", "n.m.", "nm", "..", "...", "n.a", "n.a.", "-"):
+                val = np.nan
             else:
-                s = str(raw_val).strip()
-                if s.lower() in ("", "none", "nan", "n/a", "n.m.", "nm", "..", "...", "n.a", "n.a.", "-"):
-                    continue
-                # European format: replace comma decimal
-                s_clean = s.replace(",", ".")
-                # Remove thousand separators (dots before 3 digits)
-                # Actually in XLSB numbers are native floats, strings are rare
                 try:
-                    val = float(s_clean)
-                except ValueError:
-                    continue
+                    val = float(val_raw)
+                except (ValueError, TypeError):
+                    val = np.nan
 
             records.append({
-                "entity_key": entity_key,
-                "entity_type": entity_type,
+                "section": cm["section"],
+                "section_key": slugify(cm["section"]),
                 "country_name": country_name,
                 "country_code": country_code,
                 "lt_fc_rating": lt_fc_rating,
-                "dev_status": dev_status,
-                "section": cm["section"],
+                "entity_type": entity_type,
                 "indicator": cm["indicator"],
+                "indicator_key": slugify(cm["indicator"]),
                 "unit": cm["unit"],
                 "year": cm["year"],
                 "year_num": cm["year_num"],
-                "is_average": cm["is_average"],
                 "is_forecast": cm["is_forecast"],
+                "is_average": cm["is_average"],
                 "value": val,
             })
 
+    if not records:
+        return pd.DataFrame()
+
     df = pd.DataFrame(records)
-    if df.empty:
-        return df
-
-    # Clean up section names
-    df["section"] = df["section"].replace({"": "Other"})
-    # Remove HTML entities
-    df["section"] = df["section"].str.replace("&amp;", "&", regex=False)
-    df["country_name"] = df["country_name"].str.replace("&amp;", "&", regex=False)
-    df["indicator"] = df["indicator"].str.replace("&amp;", "&", regex=False)
-
-    return df
-
+    return df.dropna(subset=["indicator", "year"])
 
 # ============================================================
-# Comparator -> Excel export
+# Excel export com gráficos (inspirado no sri_to_excel do S&P)
 # ============================================================
+
+def _fix_strref_in_zip(buf):
+    """Fix numRef->strRef in cat axis and hollow markers (from S&P app)."""
+    out = io.BytesIO()
+    with zipfile.ZipFile(buf, 'r') as zin, \
+         zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.startswith('xl/charts/') and item.filename.endswith('.xml'):
+                xml = data.decode('utf-8')
+                # Fix 1: numRef -> strRef for category axis
+                def _swap(m):
+                    inner = (m.group(1)
+                        .replace('<c:numRef>', '<c:strRef>')
+                        .replace('</c:numRef>', '</c:strRef>')
+                        .replace('<c:numCache>', '<c:strCache>')
+                        .replace('</c:numCache>', '</c:strCache>'))
+                    return '<c:cat>' + inner + '</c:cat>'
+                xml = re.sub(r'<c:cat>(.*?)</c:cat>', _swap, xml, flags=re.DOTALL)
+                # Fix 2: hollow markers
+                NS_A = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+                NOFILL = '<a:noFill ' + NS_A + '/>'
+                def _hollow_sppr(m):
+                    inner = m.group(1)
+                    inner = re.sub(r'<a:solidFill.*?</a:solidFill>', '', inner, flags=re.DOTALL)
+                    if 'noFill' not in inner:
+                        inner = NOFILL + inner
+                    return '<c:spPr>' + inner + '</c:spPr>'
+                def _hollow_marker(m):
+                    return re.sub(r'<c:spPr>(.*?)</c:spPr>', _hollow_sppr,
+                                  m.group(0), flags=re.DOTALL)
+                xml = re.sub(r'<c:marker>.*?</c:marker>', _hollow_marker,
+                             xml, flags=re.DOTALL)
+                data = xml.encode('utf-8')
+            zout.writestr(item, data)
+    out.seek(0)
+    return out
+
 
 def _sane_sheet(name, used, ml=28):
     safe = re.sub(r'[/\\?\*\[\]:]+', '_', str(name)).strip()[:ml] or 'Sheet'
@@ -638,7 +587,9 @@ def _sane_sheet(name, used, ml=28):
     return safe
 
 
+@st.cache_data(show_spinner=False)
 def comparator_to_excel(df: pd.DataFrame) -> bytes:
+    """Export Fitch Comparator data to Excel with line charts (inspired by S&P sri_to_excel)."""
     wb = Workbook()
     wb.remove(wb.active)
     used_names = set()
@@ -647,64 +598,143 @@ def comparator_to_excel(df: pd.DataFrame) -> bytes:
         left=Side(style='thin'), right=Side(style='thin'),
         top=Side(style='thin'), bottom=Side(style='thin'),
     )
-    header_font = Font(bold=True, size=10)
-    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
     header_font_white = Font(bold=True, size=10, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F3864", end_color="1F3864", fill_type="solid")
+    num_fmt = '#,##0.00'
 
-    sections = df["section"].unique() if "section" in df.columns else ["Data"]
+    # Group by indicator
+    indicators = df["indicator"].unique()
+    countries = sorted(df["country_name"].unique())
 
-    for sec in sections:
-        sdf = df[df["section"] == sec].copy() if "section" in df.columns else df.copy()
-        if sdf.empty:
+    for ind in indicators:
+        idf = df[df["indicator"] == ind].copy()
+        if idf.empty:
             continue
 
-        sheet_name = _sane_sheet(sec, used_names)
+        # Pivot: rows=year, columns=country
+        pivot = idf.pivot_table(
+            index="year", columns="country_name", values="value", aggfunc="first"
+        )
+        # Sort by year_num
+        year_order = idf.drop_duplicates("year").set_index("year")["year_num"]
+        pivot = pivot.loc[pivot.index.map(lambda y: year_order.get(y, 0)).sort_values().index]
+
+        sheet_name = _sane_sheet(ind, used_names)
         used_names.add(sheet_name)
         ws = wb.create_sheet(title=sheet_name)
 
-        # Pivot for the sheet
-        pivot = sdf.pivot_table(
-            index=["country_name", "country_code", "lt_fc_rating", "indicator"],
-            columns="year",
-            values="value",
-            aggfunc="first"
-        ).reset_index()
+        # Title row
+        ws.cell(row=1, column=1, value=ind).font = Font(bold=True, size=12)
 
-        # Write headers
-        for c_idx, col_name in enumerate(pivot.columns, 1):
-            cell = ws.cell(row=1, column=c_idx, value=str(col_name))
+        # Header row (row 3)
+        ws.cell(row=3, column=1, value="Year")
+        ws['A3'].font = header_font_white
+        ws['A3'].fill = header_fill
+        ws['A3'].border = thin_border
+        for ci, country in enumerate(pivot.columns, 2):
+            cell = ws.cell(row=3, column=ci, value=country)
             cell.font = header_font_white
             cell.fill = header_fill
-            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            cell.alignment = Alignment(horizontal="center")
             cell.border = thin_border
 
-        # Write data
-        for r_idx, row_data in enumerate(pivot.itertuples(index=False), 2):
-            for c_idx, val in enumerate(row_data, 1):
-                cell = ws.cell(row=r_idx, column=c_idx, value=val)
+        # Data rows (from row 4)
+        for ri, (year_label, row_data) in enumerate(pivot.iterrows(), 4):
+            ws.cell(row=ri, column=1, value=str(year_label)).border = thin_border
+            for ci, country in enumerate(pivot.columns, 2):
+                val = row_data.get(country)
+                cell = ws.cell(row=ri, column=ci)
+                if pd.notna(val):
+                    cell.value = float(val)
+                    cell.number_format = num_fmt
+                cell.alignment = Alignment(horizontal="center")
                 cell.border = thin_border
-                if isinstance(val, (int, float)):
-                    cell.number_format = '#,##0.0'
-                    cell.alignment = Alignment(horizontal="center")
+
+        last_data_row = 3 + len(pivot)
+        n_countries = len(pivot.columns)
+
+        # Line chart
+        if len(pivot) >= 2 and n_countries >= 1:
+            chart = LineChart()
+            chart.title = ind
+            chart.width = 28
+            chart.height = 14
+            chart.style = 10
+            chart.y_axis.title = ""
+            chart.x_axis.title = "Year"
+
+            # Category axis (years)
+            cats = Reference(ws, min_col=1, min_row=4, max_row=last_data_row)
+            chart.set_categories(cats)
+
+            # Series
+            for ci in range(2, 2 + n_countries):
+                data_ref = Reference(ws, min_col=ci, min_row=3, max_row=last_data_row)
+                chart.add_data(data_ref, titles_from_data=True)
+
+            # Marker style (circle, hollow)
+            for s in chart.series:
+                s.graphicalProperties.line.width = 22000
+                s.marker.symbol = "circle"
+                s.marker.size = 5
+                s.smooth = False
+
+            chart_row = last_data_row + 2
+            ws.add_chart(chart, f"A{chart_row}")
 
         # Auto-width
         for col_cells in ws.columns:
             max_len = max((len(str(c.value or "")) for c in col_cells), default=10)
-            ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 3, 30)
+            ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 3, 25)
+
+    # Summary sheet with all data (long format)
+    summary_name = _sane_sheet("Dados_completos", used_names)
+    used_names.add(summary_name)
+    ws_sum = wb.create_sheet(title=summary_name, index=0)
+
+    display_cols = ["section", "country_name", "country_code", "lt_fc_rating",
+                    "indicator", "unit", "year", "value"]
+    available_cols = [c for c in display_cols if c in df.columns]
+    export_df = df[available_cols].sort_values(
+        [c for c in ["section", "country_name", "indicator", "year_num"] if c in df.columns]
+    )
+
+    for ci, col_name in enumerate(available_cols, 1):
+        cell = ws_sum.cell(row=1, column=ci, value=col_name)
+        cell.font = header_font_white
+        cell.fill = header_fill
+        cell.border = thin_border
+
+    for ri, row_data in enumerate(export_df.itertuples(index=False), 2):
+        for ci, val in enumerate(row_data, 1):
+            cell = ws_sum.cell(row=ri, column=ci)
+            if pd.notna(val):
+                cell.value = float(val) if isinstance(val, (int, float, np.floating, np.integer)) else str(val)
+            cell.border = thin_border
+            if isinstance(val, (int, float, np.floating, np.integer)):
+                cell.number_format = num_fmt
+                cell.alignment = Alignment(horizontal="center")
+
+    for col_cells in ws_sum.columns:
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=10)
+        ws_sum.column_dimensions[col_cells[0].column_letter].width = min(max_len + 3, 30)
 
     buf = io.BytesIO()
     wb.save(buf)
-    return buf.getvalue()
+    buf.seek(0)
 
+    # Apply strRef fix for proper chart rendering
+    fixed = _fix_strref_in_zip(buf)
+    return fixed.read()
 
 # ============================================================
-# Comparator UI functions
+# Filtros do Comparator (inspirado no build_filters do S&P)
 # ============================================================
 
 def build_comparator_filters(df: pd.DataFrame) -> pd.DataFrame:
     st.subheader("🔍 Filtros do Comparator")
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
 
     with c1:
         entity_type = st.radio(
@@ -713,14 +743,28 @@ def build_comparator_filters(df: pd.DataFrame) -> pd.DataFrame:
             horizontal=True,
             key="fc_entity_type",
         )
-    
+
     if entity_type == "Países":
         df = df[df["entity_type"] == "COUNTRY"]
     elif entity_type == "Medianas/Grupos":
         df = df[df["entity_type"] != "COUNTRY"]
 
-    sections = sorted(df["section"].unique())
     with c2:
+        all_ratings = sorted(df["lt_fc_rating"].dropna().unique().tolist())
+        sel_ratings = st.multiselect(
+            "LT FC Rating",
+            options=all_ratings,
+            default=[],
+            key="fc_ratings",
+            help="Deixe vazio para considerar todos os ratings.",
+        )
+    if sel_ratings:
+        df = df[df["lt_fc_rating"].isin(sel_ratings)]
+
+    c3, c4 = st.columns(2)
+
+    with c3:
+        sections = sorted(df["section"].unique())
         sel_sections = st.multiselect(
             "Seções",
             sections,
@@ -730,159 +774,213 @@ def build_comparator_filters(df: pd.DataFrame) -> pd.DataFrame:
     if sel_sections:
         df = df[df["section"].isin(sel_sections)]
 
-    countries = sorted(df["country_name"].unique())
-    with c3:
+    with c4:
+        countries = sorted(df["country_name"].unique())
         sel_countries = st.multiselect(
             "Países / Grupos",
             countries,
-            default=countries[:5] if len(countries) >= 5 else countries,
+            default=[c for c in ["Brazil", "Mexico", "Colombia", "Chile", "Peru"]
+                     if c in countries][:5] or countries[:5],
             key="fc_countries",
         )
     if sel_countries:
         df = df[df["country_name"].isin(sel_countries)]
 
     # Indicator filter
-    indicators = sorted(df["indicator"].unique())
-    sel_indicator = st.selectbox(
-        "Indicador (para gráfico)",
-        indicators,
-        key="fc_indicator",
+    all_indicators = sorted(df["indicator"].unique())
+    sel_indicators = st.multiselect(
+        "Indicadores",
+        options=all_indicators,
+        default=[],
+        key="fc_indicators",
+        help="Deixe vazio para considerar todos.",
     )
+    if sel_indicators:
+        df = df[df["indicator"].isin(sel_indicators)]
 
-    return df, sel_indicator
+    # Year range slider
+    valid_years = df["year_num"].dropna()
+    if not valid_years.empty:
+        year_min, year_max = int(valid_years.min()), int(valid_years.max())
+    else:
+        year_min, year_max = 2015, 2028
 
+    c5, c6 = st.columns(2)
+    with c5:
+        sel_year_range = st.slider(
+            "Faixa de anos",
+            min_value=year_min,
+            max_value=year_max,
+            value=(year_min, year_max),
+            key="fc_years",
+        )
+    df = df[df["year_num"].between(sel_year_range[0], sel_year_range[1], inclusive="both")]
 
-def render_comparator_dashboard(df: pd.DataFrame, sel_indicator: str):
+    with c6:
+        forecast_mode = st.radio(
+            "Período",
+            ["Todos", "Somente históricos", "Somente projeções"],
+            index=0,
+            key="fc_forecast",
+            horizontal=True,
+        )
+    if forecast_mode == "Somente históricos":
+        df = df[~df["is_forecast"]]
+    elif forecast_mode == "Somente projeções":
+        df = df[df["is_forecast"]]
+
+    return df
+
+# ============================================================
+# Dashboard – gráficos de linha (inspirado no render_dashboard_tab do S&P)
+# ============================================================
+
+def render_comparator_dashboard(df: pd.DataFrame):
     st.subheader("📊 Dashboard – Fitch Comparator")
 
     if df.empty:
         st.warning("Nenhum dado encontrado com os filtros selecionados.")
         return
 
-    plot_df = df[df["indicator"] == sel_indicator].copy()
-    if plot_df.empty:
-        st.warning(f"Nenhum dado para o indicador '{sel_indicator}' com os filtros atuais.")
-        return
+    indicators = sorted(df["indicator"].unique())
 
-    # Sort by year_num
-    plot_df = plot_df.sort_values("year_num")
+    # Exclude averages for charting
+    chart_df = df[~df.get("is_average", pd.Series(False, index=df.index))].copy()
+    chart_df = chart_df.sort_values("year_num")
 
-    # Line chart
-    fig = px.line(
-        plot_df,
-        x="year",
-        y="value",
-        color="country_name",
-        markers=True,
-        title=f"{sel_indicator}",
-        labels={"value": plot_df["unit"].iloc[0] if "unit" in plot_df.columns and len(plot_df) > 0 else "Valor",
-                "year": "Período", "country_name": "País"},
-    )
-    fig.update_layout(
-        xaxis_tickangle=-45,
-        legend=dict(orientation="h", yanchor="bottom", y=-0.4),
-        height=500,
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    for ind in indicators:
+        idf = chart_df[chart_df["indicator"] == ind].copy()
+        if idf.empty:
+            continue
 
-    # Stats
-    with st.expander("📈 Estatísticas do indicador selecionado"):
-        stats = plot_df.groupby("country_name")["value"].agg(["count", "mean", "min", "max", "std"]).reset_index()
-        stats.columns = ["País", "Obs", "Média", "Mín", "Máx", "Desvio"]
-        st.dataframe(stats, use_container_width=True, hide_index=True)
+        unit = idf["unit"].dropna().iloc[0] if "unit" in idf.columns and not idf["unit"].dropna().empty else ""
+        title = f"{ind}" + (f" ({unit})" if unit and unit.lower() not in ("none", "nan", "") else "")
 
-    # Bar chart for latest year
-    latest_year = plot_df["year_num"].max()
-    bar_df = plot_df[plot_df["year_num"] == latest_year]
-    if not bar_df.empty:
-        fig_bar = px.bar(
-            bar_df.sort_values("value", ascending=True),
-            x="value",
-            y="country_name",
-            orientation="h",
-            title=f"{sel_indicator} – {bar_df['year'].iloc[0]}",
-            labels={"value": bar_df["unit"].iloc[0] if len(bar_df) > 0 else "", "country_name": ""},
-            color="value",
-            color_continuous_scale="RdYlGn",
+        fig = px.line(
+            idf,
+            x="year",
+            y="value",
+            color="country_name",
+            markers=True,
+            title=title,
+            labels={"value": "", "year": "", "country_name": "País"},
         )
-        fig_bar.update_layout(height=max(300, len(bar_df) * 30))
-        st.plotly_chart(fig_bar, use_container_width=True)
+        fig.update_traces(mode="lines+markers")
+        fig.update_layout(
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=-0.3),
+            margin=dict(l=40, r=20, t=50, b=20),
+        )
+        st_plotly_chart_compat(fig)
 
+    st.markdown("---")
+
+    # Export buttons
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        csv_data = df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ Baixar CSV",
+            data=csv_data,
+            file_name="fitch_comparator_filtrado.csv",
+            mime="text/csv",
+            key="dl_csv_dash",
+        )
+    with _c2:
+        st.download_button(
+            "⬇️ Baixar Excel (.xlsx com gráficos)",
+            data=comparator_to_excel(df),
+            file_name="fitch_comparator_filtrado.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_excel_dash",
+        )
+
+# ============================================================
+# Dados em tabela (inspirado no render_table_tab do S&P)
+# ============================================================
 
 def render_comparator_table(df: pd.DataFrame):
     st.subheader("📋 Dados em tabela – Fitch Comparator")
 
     if df.empty:
-        st.warning("Nenhum dado encontrado.")
+        st.warning("Nenhum dado encontrado com os filtros selecionados.")
         return
 
-    view = st.radio(
+    view_mode = st.radio(
         "Visualização",
         ["Longa (recomendada)", "Pivotada"],
         horizontal=True,
         index=0,
-        key="fc_view",
+        key="fc_view_mode",
     )
 
-    display_cols = ["section", "country_name", "country_code", "lt_fc_rating",
-                    "indicator", "unit", "year", "year_num", "value"]
-    existing = [c for c in display_cols if c in df.columns]
-
-    long_df = df[existing].sort_values(
-        [c for c in ["section", "country_name", "indicator", "year_num"] if c in existing]
+    long_df = df.sort_values(
+        [c for c in ["section", "country_name", "indicator", "year_num"] if c in df.columns]
     ).copy()
 
-    if view == "Longa (recomendada)":
-        display = long_df
+    if view_mode == "Longa (recomendada)":
+        display_cols = [c for c in [
+            "section", "country_name", "country_code", "lt_fc_rating",
+            "indicator", "unit", "year", "value"
+        ] if c in long_df.columns]
+        display_df = long_df[display_cols]
     else:
-        idx_cols = [c for c in ["section", "country_name", "country_code", "lt_fc_rating", "indicator"] if c in df.columns]
-        display = df.pivot_table(
-            index=idx_cols,
-            columns="year",
-            values="value",
-            aggfunc="first"
-        ).reset_index()
+        pivot_idx = [c for c in ["section", "country_name", "country_code",
+                                  "lt_fc_rating", "indicator"] if c in long_df.columns]
+        display_df = (
+            long_df.pivot_table(
+                index=pivot_idx,
+                columns="year",
+                values="value",
+                aggfunc="first",
+            ).reset_index()
+        )
 
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    st_dataframe_compat(display_df, use_container_width=True, hide_index=True)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        csv = display.to_csv(index=False).encode("utf-8-sig")
+    st.markdown("---")
+
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        csv_data = display_df.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
-            "⬇️ CSV",
-            data=csv,
-            file_name="fitch_comparator.csv",
+            "⬇️ Baixar CSV",
+            data=csv_data,
+            file_name="fitch_comparator_tabela.csv",
             mime="text/csv",
-            key="dl_comp_csv",
+            key="dl_csv_tbl",
         )
-    with c2:
-        xlsx_bytes = comparator_to_excel(long_df)
+    with _c2:
         st.download_button(
-            "⬇️ Excel (.xlsx)",
-            data=xlsx_bytes,
-            file_name="fitch_comparator.xlsx",
+            "⬇️ Baixar Excel (.xlsx com gráficos)",
+            data=comparator_to_excel(long_df),
+            file_name="fitch_comparator_tabela.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="dl_comp_xlsx",
+            key="dl_excel_tbl",
         )
 
+    st.caption(
+        "**Legenda**: section = seção temática · indicator = indicador · "
+        "year = período original · value = valor numérico · "
+        "is_forecast = projeção"
+    )
 
 # ============================================================
-# Metodologia pages
+# Metodologia – rendering (inalterado do v3)
 # ============================================================
 
 def render_methodology_overview():
     st.markdown("""
-## Fitch Sovereign Rating Methodology
+### Fitch Sovereign Rating Methodology
 
 O modelo soberano da Fitch combina:
+- **SRM (Sovereign Rating Model)**: modelo quantitativo com 18 variáveis
+  agrupadas em 4 pilares, gerando um score numérico.
+- **QO (Qualitative Overlay)**: ajuste qualitativo de até ±3 notches
+  (extensível em crises), aplicado pilar a pilar.
+- **Ratings finais**: LT FC IDR → LT LC IDR → ST FC IDR → ST LC IDR.
 
-1. **SRM (Sovereign Rating Model)**: modelo quantitativo com 18 variáveis
-   agrupadas em 4 pilares, gerando um score numérico.
-2. **QO (Qualitative Overlay)**: ajuste qualitativo de até ±3 notches 
-   (extensível em crises), aplicado pilar a pilar.
-3. **Ratings finais**: LT FC IDR → LT LC IDR → ST FC IDR → ST LC IDR.
-
-### Pilares do SRM
+#### Pilares do SRM
 
 | Pilar | Peso aprox. |
 |-------|-------------|
@@ -891,10 +989,10 @@ O modelo soberano da Fitch combina:
 | III. Public Finances | ~19% |
 | IV. External Finances | ~17% |
 
-### Intercepto
+#### Intercepto
 O intercepto OLS é **{intercept:.3f}**.
 
-### Escala
+#### Escala
 O score do SRM mapeia para a escala de rating usando arredondamento:
 - 16 = AAA, 15 = AA+, ..., 1 = B-
 - Abaixo de 1 → CCC+
@@ -908,10 +1006,8 @@ def render_methodology_pillar(pillar_key: str):
     rows = []
     for var_key, meta in SRM_VARIABLES[pillar_key].items():
         value_raw = safe_number_input(
-            var_key,
-            meta["label"],
-            st.session_state.get(var_key, 0.0),
-            meta["help"],
+            var_key, meta["label"],
+            st.session_state.get(var_key, 0.0), meta["help"],
         )
         contribution = float(value_raw) * float(meta["coefficient"])
         rows.append({
@@ -922,9 +1018,9 @@ def render_methodology_pillar(pillar_key: str):
             "Contribuição": contribution,
         })
 
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.metric("Subtotal do pilar", f"{df['Contribuição'].sum():.3f}")
+    rdf = pd.DataFrame(rows)
+    st.dataframe(rdf, use_container_width=True, hide_index=True)
+    st.metric("Subtotal do pilar", f"{rdf['Contribuição'].sum():.3f}")
 
 
 def render_methodology_qo():
@@ -940,7 +1036,7 @@ def render_methodology_qo():
             options=list(QO_GUIDANCE.keys()),
             format_func=lambda x: f"{x:+d}  —  {QO_GUIDANCE[x]}",
             key=qo_key,
-            index=2,  # default = 0
+            index=2,
         )
 
         with st.expander("Fatores considerados"):
@@ -956,7 +1052,6 @@ def render_methodology_results():
     inputs = get_clean_srm_inputs()
     srm_score, details = compute_srm(inputs)
 
-    # QO
     adjustments = {
         "structural": int(st.session_state.get("qo_structural", 0)),
         "macro": int(st.session_state.get("qo_macro", 0)),
@@ -967,16 +1062,14 @@ def render_methodology_results():
     qo_total = clamp_qo(adjustments, crisis_ext)
     final_score = srm_score + qo_total
 
-    # Ratings
     lt_fc_idr = score_to_lt_rating(final_score)
     lc_adjust = int(st.session_state.get("lc_manual_adjust", 0))
-    lt_lc_idr = apply_notches(lt_fc_idr, -lc_adjust)  # LC can be same or higher
+    lt_lc_idr = apply_notches(lt_fc_idr, -lc_adjust)
 
     fc_robust = bool(st.session_state.get("fc_robust_liquidity", False))
     st_fc_idr = map_short_term(lt_fc_idr, fc_robust)
     st_lc_idr = map_short_term(lt_lc_idr, True)
 
-    # Display
     c1, c2, c3 = st.columns(3)
     c1.metric("SRM Score", f"{srm_score:.2f}")
     c2.metric("QO Total", f"{qo_total:+d}")
@@ -992,7 +1085,6 @@ def render_methodology_results():
 
     st.divider()
 
-    # LC adjustment
     st.number_input(
         "LC notch adjustment vs FC (positivo = LC acima do FC)",
         min_value=-3, max_value=6, value=lc_adjust, step=1,
@@ -1000,15 +1092,11 @@ def render_methodology_results():
     )
     st.checkbox("FC: robust external liquidity (higher ST mapping)", key="fc_robust_liquidity")
 
-    # Radar
     st.plotly_chart(build_radar(srm_score, qo_total, final_score), use_container_width=True)
 
-    # Details table
     with st.expander("📋 Detalhes do SRM"):
         det_df = pd.DataFrame(details)
         st.dataframe(det_df, use_container_width=True, hide_index=True)
-        st.metric("Score total SRM", f"{srm_score:.3f}")
-
 
 # ============================================================
 # MAIN
@@ -1017,19 +1105,19 @@ def render_methodology_results():
 def main():
     init_state()
 
-    # Sidebar – File upload
-    st.sidebar.title("📂 Upload")
-    uploaded_file = st.sidebar.file_uploader(
-        "Envie o XLSB do Fitch Comparator",
+    st.sidebar.title("Fitch Sovereign App")
+    st.sidebar.caption("v4 – Metodologia + Comparator (Dashboard & Tabela)")
+
+    uploaded = st.sidebar.file_uploader(
+        "📂 Carregar Fitch Comparator (.xlsb)",
         type=["xlsb"],
-        key="xlsb_upload",
+        key="fitch_upload",
     )
 
     comparator_df = None
-    if uploaded_file is not None:
-        file_bytes = uploaded_file.read()
-        with st.spinner("Processando XLSB..."):
-            comparator_df = parse_fitch_comparator(file_bytes)
+    if uploaded is not None:
+        with st.spinner("Processando arquivo XLSB…"):
+            comparator_df = parse_fitch_comparator(uploaded.getvalue())
         if comparator_df is not None and not comparator_df.empty:
             st.sidebar.success(
                 f"✅ {len(comparator_df):,} registros · "
@@ -1039,7 +1127,7 @@ def main():
         else:
             st.sidebar.error("Não foi possível extrair dados do arquivo.")
 
-    # Main tabs
+    # ========== 3 TABS ==========
     tab_met, tab_dash, tab_data = st.tabs([
         "📘 Metodologia",
         "📊 Dashboard",
@@ -1086,8 +1174,8 @@ def main():
         if comparator_df is None or comparator_df.empty:
             st.info("⬅️ Envie o arquivo XLSB na barra lateral para ativar o dashboard.")
         else:
-            filtered_df, sel_indicator = build_comparator_filters(comparator_df)
-            render_comparator_dashboard(filtered_df, sel_indicator)
+            filtered_df = build_comparator_filters(comparator_df)
+            render_comparator_dashboard(filtered_df)
 
     # ========== TAB 3: Dados ==========
     with tab_data:
@@ -1095,40 +1183,58 @@ def main():
         if comparator_df is None or comparator_df.empty:
             st.info("⬅️ Envie o arquivo XLSB na barra lateral para visualizar os dados.")
         else:
-            # Re-apply same entity type filter
-            df_for_table = comparator_df.copy()
-            entity_type_table = st.radio(
-                "Tipo de entidade",
-                ["Países", "Medianas/Grupos", "Todos"],
-                horizontal=True,
-                key="fc_entity_type_table",
-            )
-            if entity_type_table == "Países":
-                df_for_table = df_for_table[df_for_table["entity_type"] == "COUNTRY"]
-            elif entity_type_table == "Medianas/Grupos":
-                df_for_table = df_for_table[df_for_table["entity_type"] != "COUNTRY"]
+            # Re-apply filters for table tab (independent from dashboard)
+            st.markdown("---")
+            df_table = comparator_df.copy()
 
-            sections_table = sorted(df_for_table["section"].unique())
-            sel_sections_table = st.multiselect(
-                "Seções",
-                sections_table,
-                default=sections_table[:3] if len(sections_table) >= 3 else sections_table,
-                key="fc_sections_table",
-            )
-            if sel_sections_table:
-                df_for_table = df_for_table[df_for_table["section"].isin(sel_sections_table)]
+            tc1, tc2 = st.columns(2)
+            with tc1:
+                entity_type_tbl = st.radio(
+                    "Tipo de entidade",
+                    ["Países", "Medianas/Grupos", "Todos"],
+                    horizontal=True,
+                    key="fc_entity_type_tbl",
+                )
+            if entity_type_tbl == "Países":
+                df_table = df_table[df_table["entity_type"] == "COUNTRY"]
+            elif entity_type_tbl == "Medianas/Grupos":
+                df_table = df_table[df_table["entity_type"] != "COUNTRY"]
 
-            countries_table = sorted(df_for_table["country_name"].unique())
-            sel_countries_table = st.multiselect(
-                "Países",
-                countries_table,
-                default=countries_table[:10] if len(countries_table) >= 10 else countries_table,
-                key="fc_countries_table",
-            )
-            if sel_countries_table:
-                df_for_table = df_for_table[df_for_table["country_name"].isin(sel_countries_table)]
+            with tc2:
+                all_ratings_tbl = sorted(df_table["lt_fc_rating"].dropna().unique().tolist())
+                sel_ratings_tbl = st.multiselect(
+                    "LT FC Rating",
+                    options=all_ratings_tbl,
+                    default=[],
+                    key="fc_ratings_tbl",
+                )
+            if sel_ratings_tbl:
+                df_table = df_table[df_table["lt_fc_rating"].isin(sel_ratings_tbl)]
 
-            render_comparator_table(df_for_table)
+            tc3, tc4 = st.columns(2)
+            with tc3:
+                sections_tbl = sorted(df_table["section"].unique())
+                sel_sections_tbl = st.multiselect(
+                    "Seções",
+                    sections_tbl,
+                    default=sections_tbl[:3] if len(sections_tbl) >= 3 else sections_tbl,
+                    key="fc_sections_tbl",
+                )
+            if sel_sections_tbl:
+                df_table = df_table[df_table["section"].isin(sel_sections_tbl)]
+
+            with tc4:
+                countries_tbl = sorted(df_table["country_name"].unique())
+                sel_countries_tbl = st.multiselect(
+                    "Países",
+                    countries_tbl,
+                    default=countries_tbl[:10] if len(countries_tbl) >= 10 else countries_tbl,
+                    key="fc_countries_tbl",
+                )
+            if sel_countries_tbl:
+                df_table = df_table[df_table["country_name"].isin(sel_countries_tbl)]
+
+            render_comparator_table(df_table)
 
 
 if __name__ == "__main__":
