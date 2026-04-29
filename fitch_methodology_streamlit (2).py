@@ -1,6 +1,6 @@
 # ============================================================
 # Fitch Sovereign Methodology + Global Sovereign Data Comparator
-# Streamlit App – v4 (fix XLSB parser)
+# Streamlit App – v4 (fix NaN + auto-load local .xlsb)
 # ============================================================
 
 import io
@@ -17,7 +17,7 @@ from openpyxl import Workbook
 from openpyxl.chart import LineChart, Reference
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-st.set_page_config(page_title="Fitch Sovereign App", layout="wide")
+st.set_page_config(page_title="Fitch Sovereign Methodology + Comparator", layout="wide")
 
 INTERCEPT = 4.877
 
@@ -366,6 +366,20 @@ def init_state():
         st.session_state.setdefault(k, v)
 
 
+
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+
+
+def find_local_xlsb():
+    """Return the first .xlsb found in data/ or app dir, or None."""
+    for search_dir in [DATA_DIR, APP_DIR]:
+        if search_dir.exists():
+            files = sorted([p for p in search_dir.glob("*.xlsb") if not p.name.startswith("~$")])
+            if files:
+                return files[0]
+    return None
+
 # ============================================================
 # Fitch XLSB Parser
 # ============================================================
@@ -395,91 +409,68 @@ def coerce_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(s, errors="coerce")
 
 
+
+
+def _cell_str(v) -> str:
+    """Safely convert any cell value to string, handling NaN/Inf floats."""
+    if v is None:
+        return ""
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return ""
+        if v == int(v):
+            return str(int(v))
+        return str(v)
+    return str(v).strip()
+
+
 @st.cache_data(show_spinner=False)
 def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
     """Parse the Fitch Global Sovereign Data Comparator .xlsb format."""
     from pyxlsb import open_workbook
 
-    def _cell_str(v):
-        """Convert any cell value to a clean string for matching."""
-        if v is None:
-            return ""
-        if isinstance(v, float):
-            if v == int(v):
-                return str(int(v))
-            return str(v)
-        return str(v).strip()
-
-    # 1. Read ALL rows from the workbook (try each sheet until we get data)
+    # 1. Read ALL rows from first sheet
     all_rows = []
-    chosen_sheet = None
     with open_workbook(io.BytesIO(file_bytes)) as wb:
         sheets = wb.sheets
-        if not sheets:
+        sheet_name = sheets[0] if sheets else None
+        if sheet_name is None:
             return pd.DataFrame()
-        for sheet_name in sheets:
-            candidate_rows = []
-            with wb.get_sheet(sheet_name) as sheet:
-                for row in sheet.rows():
-                    candidate_rows.append([cell.v for cell in row])
-            if len(candidate_rows) >= 10:
-                all_rows = candidate_rows
-                chosen_sheet = sheet_name
-                break
+        with wb.get_sheet(sheet_name) as sheet:
+            for row in sheet.rows():
+                all_rows.append([cell.v for cell in row])
 
     if len(all_rows) < 10:
         return pd.DataFrame()
 
     raw = pd.DataFrame(all_rows)
-    SCAN_LIMIT = min(60, len(raw))
 
-    # 2. Find the "Category"/"Sovereign" row OR the period/year header row
+    # 2. Find the "Category" row (period/year header)
     cat_row_idx = None
-
-    # Strategy A: look for "category" or "sovereign" as a cell value
-    for i in range(SCAN_LIMIT):
+    for i in range(min(20, len(raw))):
         row_vals = [_cell_str(v).lower() for v in raw.iloc[i]]
         if "category" in row_vals or "sovereign" in row_vals:
             cat_row_idx = i
             break
 
-    # Strategy B: find a row with many year-like values (2000-2035)
     if cat_row_idx is None:
-        for i in range(SCAN_LIMIT):
-            year_count = 0
-            for v in raw.iloc[i]:
-                s = _cell_str(v)
-                if re.match(r"^(19|20)\d{2}$", s):
-                    year_count += 1
-                elif "av." in s.lower() or "average" in s.lower() or "latest" in s.lower():
-                    year_count += 1
-            if year_count >= 4:
-                cat_row_idx = i
-                break
-
-    # Strategy C: look for numeric floats that are years (pyxlsb stores as float)
-    if cat_row_idx is None:
-        for i in range(SCAN_LIMIT):
-            year_count = 0
-            for v in raw.iloc[i]:
-                if isinstance(v, (int, float)) and 2000 <= v <= 2040:
-                    year_count += 1
-            if year_count >= 4:
+        # Fallback: find row where we see years like 2024, 2025
+        for i in range(min(20, len(raw))):
+            row_str = " ".join([str(v) for v in raw.iloc[i] if v is not None])
+            if re.search(r"\b20(2[0-9]|3[0-9])\b", row_str) and row_str.count("20") > 5:
                 cat_row_idx = i
                 break
 
     if cat_row_idx is None:
-        # Show diagnostic info
-        diag_lines = []
-        for i in range(min(30, len(raw))):
-            cells_preview = [_cell_str(v)[:20] for v in raw.iloc[i][:15]]
-            diag_lines.append(f"Row {i}: {cells_preview}")
         st.error("Não foi possível localizar a linha de períodos no XLSB.")
-        with st.expander("Diagnóstico – primeiras 30 linhas"):
-            st.code("\n".join(diag_lines))
         return pd.DataFrame()
 
     # 3. Extract header rows
+    # Section row = ~3 rows above cat_row (the one with "RATINGS AND METADATA", "DOMESTIC ECONOMY" etc.)
+    # Indicator row = ~2 rows above cat_row (the one with "LT FC IDR", "Real GDP growth" etc.)
+    # Unit row = ~1 row above cat_row (the one with "(USDbn)", "(% GDP)" etc.)
+    # Period row = cat_row itself ("2025", "19-23 av." etc.)
+
     section_row_idx = max(0, cat_row_idx - 4)
     indicator_row_idx = max(0, cat_row_idx - 2)
     unit_row_idx = max(0, cat_row_idx - 1)
@@ -491,7 +482,7 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
         vals = []
         for c in range(ncols):
             v = raw.iloc[idx, c] if idx < len(raw) else None
-            vals.append(_cell_str(v))
+            vals.append(str(v).strip() if v is not None else "")
         return vals
 
     sections_raw = get_row_vals(section_row_idx)
@@ -516,6 +507,8 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
     data_start = cat_row_idx + 1
 
     # 5. Find first data column (after metadata columns)
+    # Metadata is typically first ~14 columns until we start seeing numeric year data
+    # We'll identify metadata vs data columns by checking the period row
     meta_end = 0
     for c in range(ncols):
         p = periods_raw[c].strip()
@@ -567,12 +560,12 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
     for r in range(data_start, len(raw)):
         row = raw.iloc[r]
 
-        entity_key = _cell_str(row.iloc[0])
+        entity_key = str(row.iloc[0]).strip() if row.iloc[0] is not None else ""
         if not entity_key or entity_key.lower() in ("none", "nan", ""):
             continue
 
         # Determine entity type – col 4 typically says COUNTRY or HEADING
-        entity_type_raw = _cell_str(row.iloc[4]).upper() if len(row) > 4 else ""
+        entity_type_raw = str(row.iloc[4]).strip().upper() if len(row) > 4 and row.iloc[4] is not None else ""
         if "COUNTRY" in entity_type_raw:
             entity_type = "COUNTRY"
         elif "HEADING" in entity_type_raw:
@@ -581,9 +574,9 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
             entity_type = "OTHER"
 
         # Country code (ISO) – col 5
-        country_code = _cell_str(row.iloc[5]) if len(row) > 5 else ""
+        country_code = str(row.iloc[5]).strip() if len(row) > 5 and row.iloc[5] is not None else ""
         # Country name – col 6
-        country_name = _cell_str(row.iloc[6]) if len(row) > 6 else ""
+        country_name = str(row.iloc[6]).strip() if len(row) > 6 and row.iloc[6] is not None else ""
         if not country_name or country_name.lower() in ("none", "nan"):
             country_name = entity_key
 
@@ -591,15 +584,15 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
         lt_fc_rating = ""
         for rc in [7, 1]:
             if len(row) > rc and row.iloc[rc] is not None:
-                candidate = _cell_str(row.iloc[rc])
-                if candidate and candidate.upper() in [r2 for r2 in LONG_TERM_SCALE] + ["NR", "WD"]:
+                candidate = str(row.iloc[rc]).strip()
+                if candidate and candidate.upper() in [r for r in LONG_TERM_SCALE] + ["NR", "WD"]:
                     lt_fc_rating = candidate.upper()
                     break
         if not lt_fc_rating:
-            lt_fc_rating = _cell_str(row.iloc[1]) if len(row) > 1 else ""
+            lt_fc_rating = str(row.iloc[1]).strip() if len(row) > 1 and row.iloc[1] is not None else ""
 
         # Dev status – col 13
-        dev_status = _cell_str(row.iloc[13]) if len(row) > 13 else ""
+        dev_status = str(row.iloc[13]).strip() if len(row) > 13 and row.iloc[13] is not None else ""
         if dev_status.lower() in ("none", "nan"):
             dev_status = ""
 
@@ -621,7 +614,10 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
                 s = str(raw_val).strip()
                 if s.lower() in ("", "none", "nan", "n/a", "n.m.", "nm", "..", "...", "n.a", "n.a.", "-"):
                     continue
+                # European format: replace comma decimal
                 s_clean = s.replace(",", ".")
+                # Remove thousand separators (dots before 3 digits)
+                # Actually in XLSB numbers are native floats, strings are rare
                 try:
                     val = float(s_clean)
                 except ValueError:
@@ -650,6 +646,7 @@ def parse_fitch_comparator(file_bytes) -> pd.DataFrame:
 
     # Clean up section names
     df["section"] = df["section"].replace({"": "Other"})
+    # Remove HTML entities
     df["section"] = df["section"].str.replace("&amp;", "&", regex=False)
     df["country_name"] = df["country_name"].str.replace("&amp;", "&", regex=False)
     df["indicator"] = df["indicator"].str.replace("&amp;", "&", regex=False)
@@ -1050,20 +1047,25 @@ def main():
     init_state()
 
     # Sidebar – File upload
-    st.sidebar.title("Fitch Sovereign App")
-
-    st.sidebar.caption("v4 – Metodologia + Comparator (Dashboard & Tabela)")
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Carregar Fitch Comparator (.xlsb)**")
+    st.sidebar.title("📂 Upload")
     uploaded_file = st.sidebar.file_uploader(
-        "Envie o XLSB do Fitch Comparator",
+        "Envie o XLSB do Fitch Comparator (ou coloque na pasta data/)",
         type=["xlsb"],
         key="xlsb_upload",
     )
 
-    comparator_df = None
+    # Determine file bytes: uploaded or local
+    file_bytes = None
     if uploaded_file is not None:
         file_bytes = uploaded_file.read()
+    else:
+        local_xlsb = find_local_xlsb()
+        if local_xlsb is not None:
+            file_bytes = local_xlsb.read_bytes()
+            st.sidebar.info(f"📁 Usando arquivo local: {local_xlsb.name}")
+
+    comparator_df = None
+    if file_bytes is not None:
         with st.spinner("Processando XLSB..."):
             comparator_df = parse_fitch_comparator(file_bytes)
         if comparator_df is not None and not comparator_df.empty:
@@ -1169,3 +1171,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
