@@ -730,7 +730,8 @@ def comparator_to_excel(df):
             index="year", columns="country_name", values="value", aggfunc="first"
         )
         year_order = idf.drop_duplicates("year").set_index("year")["year_num"]
-        pivot = pivot.loc[pivot.index.map(lambda y: year_order.get(y, 0)).sort_values().index]
+        sort_keys = pivot.index.to_series().map(lambda y: year_order.get(y, 0))
+        pivot = pivot.iloc[sort_keys.values.argsort()]
 
         sheet_name = _sane_sheet(ind, used_names)
         used_names.add(sheet_name)
