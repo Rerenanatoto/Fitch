@@ -792,9 +792,10 @@ def comparator_to_excel(df):
     ws_sum = wb.create_sheet(title=summary_name, index=0)
     display_cols = [c for c in ["section", "country_name", "country_code", "lt_fc_rating",
                                 "indicator", "unit", "year", "value"] if c in df.columns]
-    export_df = df[display_cols].sort_values(
-        [c for c in ["section", "country_name", "indicator", "year_num"] if c in df.columns]
-    )
+    export_df = df.sort_values(        
+        [c for c in ["section", "country_name", "indicator", "year_num"] if c in 
+df.columns]    
+    )[display_cols]
     for ci, col_name in enumerate(display_cols, 1):
         cell = ws_sum.cell(row=1, column=ci, value=col_name)
         cell.font = header_font_white
